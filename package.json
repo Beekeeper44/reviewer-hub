@@ -1,0 +1,8 @@
+{
+  "name": "review-hub",
+  "version": "1.5.0",
+  "private": true,
+  "description": "Arena Club Review team hub",
+  "engines": { "node": ">=18" },
+  "dependencies": { "pg": "^8.11.5" }
+}

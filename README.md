@@ -37,7 +37,7 @@ In Vercel, go to **Project → Settings → Environment Variables**. Add the two
 | `CRON_SECRET` | Recommended. Any random string. Lets Vercel's scheduler rebuild Risers & Fallers |
 | `MOVERS_SOURCE_URL` | Optional. Defaults to Metabase question 43429. Set it only to use a different feed |
 | `MOVERS_SOURCE_TOKEN` | Optional. Sent as `Authorization: Bearer …` to that feed |
-| `MOVERS_METABASE_API_KEY` | **Needed for Risers & Fallers.** Metabase API key that can run question 43429 |
+| `METABASE_HOST` + `METABASE_API_KEY` | **Needed for Risers & Fallers.** Your Metabase address and an API key that can run question 43429. `MOVERS_METABASE_API_KEY` also works |
 | `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to qualify, default 3 |
 | `TCGPLAYER_PUBLIC_KEY` / `TCGPLAYER_PRIVATE_KEY` | Optional. TCGplayer developer keys, for Pokémon and One Piece card images |
 | `POKEMONTCG_API_KEY` | Optional. Raises the Pokémon TCG API rate limit |

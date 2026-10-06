@@ -1026,6 +1026,18 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
 .invbox{margin-top:14px;padding:14px;border:2px solid var(--green);border-radius:12px;background:var(--well)}
 .prow .btn.sm{margin-left:6px}
 .invbox a.btn{color:var(--ink);display:inline-flex;align-items:center}
+
+/* robust card layout: name gets the full width, trend line sits under the numbers, cards wrap when narrow */
+.mvsecgrid.across{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.mvlist li,.mvsecgrid.split .mvlist li{grid-template-columns:20px 46px minmax(0,1fr);gap:10px;padding:10px 4px;align-items:center}
+.mvlist img{width:46px;height:64px}
+.mvlist .bd{gap:3px}
+.mvlist .bd b{font-size:15px;word-break:normal;overflow-wrap:break-word;hyphens:manual;-webkit-line-clamp:2}
+.mvlist .mt{flex-wrap:nowrap;white-space:nowrap}
+.mvlist .mvchg{font-size:15px}
+.mvlist .sp{display:block;margin-top:2px}
+.mvlist .mvsp,.mvsecgrid.split .mvlist .mvsp{width:100%;max-width:160px;height:24px;margin:0}
+@media (max-height:960px){.mvlist li{padding:8px 4px}.mvlist img{width:40px;height:56px}.mvlist .mvsp{height:20px}}
 </style>
 </head>
 <body>
@@ -1936,15 +1948,16 @@ function mvList(rows,up,n,cat,start){
   start=start||0;rows=(rows||[]).slice(0,n);
   const meta=mvMeta[cat]||{};
   if(!rows.length)return `<div class="mvempty">${esc(meta.note||"Nothing qualifies yet.")}</div>`;
-  return `<ol class="mvlist">${rows.map((x,i)=>`<li title="${esc(x.name)} · ${x.volume30.toLocaleString()} sales in 30 days"
+  const vl=n=>(meta.volLabel||"sales").replace(/s$/,n===1?"":"s");
+  return `<ol class="mvlist">${rows.map((x,i)=>`<li title="${esc(x.name)} · ${x.volume30.toLocaleString()} ${esc(vl(x.volume30))} in 30 days"
       ${x.url?`data-url="${esc(x.url)}"`:""}>
     <span class="rk">${start+i+1}</span>
     <img src="${esc(x.image||mvArt(x.name,cat))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,cat))}"
       onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
     <span class="bd"><b>${esc(x.name)}</b>
       <span class="mt"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
-        <span class="vol">${x.volume30.toLocaleString()} ${esc((meta.volLabel||"sales").replace(/s$/,x.volume30===1?"":"s"))}</span></span></span>
-    <span class="sp">${mvSpark(x.spark,up)}</span></li>`).join("")}</ol>`;
+        <span class="vol">${x.volume30.toLocaleString()} ${esc(vl(x.volume30))}</span></span>
+      <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`).join("")}</ol>`;
 }
 function renderMovers(){
   const d=mvData,tabs=document.getElementById("mvTabs"),body=document.getElementById("mvBody"),

@@ -70,31 +70,46 @@ function clean(r) {
 }
 
 async function fromFeed() {
-  // Default: the Risers & Fallers question in Arena Club's Metabase (sql/movers.sql).
-  // MOVERS_SOURCE_URL in Vercel overrides it. The API key is never in code.
-  const src = process.env.MOVERS_SOURCE_URL || 'https://arena-club.metabaseapp.com/api/card/43429/query/json';
-  if (/metabaseapp\.com/.test(src) && !process.env.MOVERS_METABASE_API_KEY) return null;
+  // Uses the Metabase host + API key already set in Vercel (METABASE_HOST / METABASE_API_KEY, the
+  // same names other Arena tools use). MOVERS_SOURCE_URL / MOVERS_METABASE_API_KEY override them.
+  const key = process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY || '';
+  let host = (process.env.METABASE_HOST || process.env.METABASE_URL || process.env.METABASE_SITE_URL ||
+              'https://arena-club.metabaseapp.com').trim().replace(/\/+$/, '').replace(/\/api$/, '');
+  if (!/^https?:\/\//.test(host)) host = 'https://' + host;
+  const question = process.env.MOVERS_QUESTION_ID || '43429';
+  const src = process.env.MOVERS_SOURCE_URL || host + '/api/card/' + question + '/query/json';
+  const isMb = /\/api\/card\/\d+\/query\/json/.test(src);
+  if (isMb && !key) throw new Error('no Metabase API key found (METABASE_API_KEY) in Vercel');
   const headers = { accept: 'application/json' };
   if (process.env.MOVERS_SOURCE_TOKEN) headers.authorization = 'Bearer ' + process.env.MOVERS_SOURCE_TOKEN;
   // Metabase saved question: POST <metabase>/api/card/<id>/query/json with an API key (stays private,
   // no public link needed). Anything else is fetched with GET.
-  const isMetabase = /\/api\/card\/\d+\/query\/json/.test(src);
-  if (process.env.MOVERS_METABASE_API_KEY) headers['x-api-key'] = process.env.MOVERS_METABASE_API_KEY;
+  const isMetabase = isMb;
+  if (key) headers['x-api-key'] = key;
   const r = await fetch(src, isMetabase ? { method: 'POST', headers } : { headers });
-  if (!r.ok) throw new Error('source returned ' + r.status);
+  if (!r.ok) {
+    let detail = '';
+    try { detail = (await r.text()).slice(0, 160); } catch (e) { /* none */ }
+    throw new Error('Metabase returned ' + r.status +
+      (r.status === 401 || r.status === 403 ? ' (check the API key and that its group can run question ' + (process.env.MOVERS_QUESTION_ID || '43429') + ')' : '') +
+      (detail ? ': ' + detail : ''));
+  }
   const d = await r.json();
-  return (Array.isArray(d) ? d : (d.rows || d.data || [])).map(lowerKeys);
+  if (d && !Array.isArray(d) && (d.error || d.message)) throw new Error('Metabase: ' + String(d.error || d.message).slice(0, 200));
+  const rows = (Array.isArray(d) ? d : (d.rows || d.data || [])).map(lowerKeys);
+  if (!rows.length) throw new Error('Metabase question returned no rows');
+  return rows;
 }
 
 // Where each category's numbers come from, shown under the lists.
 const PUBLIC_NOTE = {
   pokemon: 'Public data: Cardmarket average sold prices via the Pokémon TCG API. Sales column = cards with sales in the last 30 days.',
 };
-const NO_PUBLIC = 'There is no free public sales feed for this category. Connect Arena Club comps (sql/movers.sql) or a SportsCardsPro / PriceCharting API key.';
+const NO_DATA = 'Not enough sales yet: needs at least 3 PSA / Beckett / SGC / CSG sales in each of the last two 30-day windows.';
 
 async function build() {
-  let rows = [], notes = {}, errors = [];
-  try { const f = await fromFeed(); if (f) rows = f; } catch (e) { errors.push(String(e.message || e)); }
+  let rows = [], notes = {}, errors = [], feedError = '';
+  try { rows = await fromFeed(); } catch (e) { feedError = String(e.message || e); errors.push('Arena data: ' + feedError); }
   const fed = new Set(rows.map(x => catOf(x.category)));
 
   // Free public data fills any category the feed doesn't cover.
@@ -106,19 +121,24 @@ async function build() {
   const categories = CATS.map(c => {
     const pool = rows.filter(x => catOf(x.category) === c.id).map(clean)
       .filter(x => x.name && Number.isFinite(x.change30) &&
-        x.volume30 >= (notes[c.id] ? 1 : MIN_VOLUME));
+        x.volume30 >= (notes[c.id] ? 3 : MIN_VOLUME));        // public Pokémon: 3+ cards per character
     const up = pool.filter(x => x.change30 > 0).sort((a, b) => score(b) - score(a)).slice(0, TOP);
     const down = pool.filter(x => x.change30 < 0).sort((a, b) => score(a) - score(b)).slice(0, TOP);
     return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down,
       volLabel: notes[c.id] ? 'cards' : 'sales',
-      note: notes[c.id] || (pool.length ? '' : NO_PUBLIC) };
+      note: notes[c.id] || (pool.length ? '' : feedError ? 'Arena data feed not connected: ' + feedError : NO_DATA) };
   });
   if (!categories.some(c => c.risers.length || c.fallers.length))
     return { ok: false, why: errors.length ? errors.join(' · ') : 'no-source' };
   await Promise.all(categories.map(c => addImages([...c.risers, ...c.fallers], c.id)));
-  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories };
+  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories, feedError, cfg: config() };
 }
 
+function config() {
+  return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
+    !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v5'].join('|');
+}
 export async function rebuild() {
   const body = await build();
   body.builtAt = new Date().toISOString();
@@ -145,7 +165,14 @@ export default requireUser(async function (req, res, who) {
       if (!body.ok) body = Object.assign((await snapshot()) || {}, { rebuildError: body.why }) ;
     } else {
       body = await snapshot();
-      if (!body) body = await rebuild();           // very first time only
+      // first time, settings changed since it was built (say, the API key was just added),
+      // or the Arena feed failed last time and it's been over 15 minutes: rebuild now
+      const stale = body && (body.cfg !== config() ||
+        (body.feedError && Date.now() - Date.parse(body.builtAt || 0) > 15 * 60000));
+      if (!body || stale) {
+        const fresh = await rebuild();
+        body = fresh.ok ? fresh : (body || fresh);
+      }
     }
     res.setHeader('Cache-Control', 'private, max-age=60');
     res.status(200).json(body);

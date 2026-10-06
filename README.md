@@ -1,67 +1,45 @@
 # Review Hub on Vercel
 
-The full v1.5 app — forum, drafts, cropping, the pen tool, notifications, emoji and GIFs — with
-shared storage, Google sign-in and roles behind it.
+The full v1.5 app (forum, drafts, cropping, the pen tool, notifications, emoji and GIFs) with
+shared storage, invite-only sign-in and roles behind it. No Google or other sign-in provider is
+needed.
 
 ## What you need first
 
-Three accounts, all with free tiers that comfortably cover a team of five.
+Two accounts. Both have free tiers that comfortably cover a small team.
 
-1. **Vercel** — hosting. <https://vercel.com>
-2. **A Postgres database** — [Neon](https://neon.tech) is the easiest. Create a project and copy
+1. **Vercel**, for hosting. <https://vercel.com>
+2. **A Postgres database.** [Neon](https://neon.tech) is the easiest: create a project and copy
    the connection string. Vercel's own Postgres works too.
-3. **A Google OAuth client** — for sign-in. Details below.
 
-## 1. Google sign-in
+## 1. Deploy
 
-At <https://console.cloud.google.com>:
+Push this folder to a GitHub repository. In Vercel, choose **Add New → Project** and import it.
+Framework preset is **Other**, with no build command and no output directory. The files are
+served as they are.
 
-- **APIs & Services → OAuth consent screen.** Choose **Internal** if Arena Club is a Workspace
-  organisation — that alone restricts sign-in to your staff. Fill in the app name and your email.
-- **APIs & Services → Credentials → Create credentials → OAuth client ID.**
-  Application type **Web application**.
-- Under **Authorised redirect URIs**, add:
-
-  ```
-  https://YOUR-PROJECT.vercel.app/api/callback
-  ```
-
-  You will not know the domain until after the first deploy. Deploy first, then come back and
-  add the real one — sign-in fails with a redirect-mismatch error until you do.
-- Copy the **Client ID** and **Client secret**.
-
-## 2. Deploy
-
-Push this folder to a GitHub repository, then in Vercel choose **Add New → Project** and import
-it. Framework preset: **Other**. No build command, no output directory — the files are served as
-they are.
-
-Or from this folder with the CLI:
+Or, from this folder, use the CLI:
 
 ```bash
 npm i -g vercel
 vercel
 ```
 
-## 3. Environment variables
+## 2. Environment variables
 
-In Vercel: **Project → Settings → Environment Variables**. Add all five for **Production**,
-**Preview** and **Development**. See `.env.example`.
+In Vercel, go to **Project → Settings → Environment Variables**. Add the two required ones for
+**Production** (and Preview if you use it). See `.env.example`.
 
 | Name | What it is |
 |---|---|
-| `DATABASE_URL` | The Postgres connection string |
-| `GOOGLE_CLIENT_ID` | From the OAuth client |
-| `GOOGLE_CLIENT_SECRET` | From the OAuth client |
-| `SESSION_SECRET` | 40+ random characters. Signs the login cookie |
-| `ALLOWED_DOMAIN` | `arenaclub.com`. Only these addresses can sign in |
-| `ADMIN_EMAILS` | Your address, comma separated for more |
+| `DATABASE_URL` | **Required.** The Postgres connection string |
+| `SESSION_SECRET` | **Required.** 40+ random characters. Signs the login cookie, and is the one-time setup code |
 | `MOVERS_SOURCE_URL` | Optional. JSON feed for Risers & Fallers (see below) |
 | `MOVERS_SOURCE_TOKEN` | Optional. Sent as `Authorization: Bearer …` to that feed |
 | `MOVERS_METABASE_API_KEY` | Optional. Metabase API key, when the feed is a Metabase question |
+| `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to qualify, default 10 |
 | `TCGPLAYER_PUBLIC_KEY` / `TCGPLAYER_PRIVATE_KEY` | Optional. TCGplayer developer keys, for Pokémon and One Piece card images |
 | `POKEMONTCG_API_KEY` | Optional. Raises the Pokémon TCG API rate limit |
-| `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to qualify, default 10 |
 
 Generate a session secret with:
 
@@ -71,38 +49,62 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 **Redeploy after adding variables.** Vercel only picks them up on a new deployment.
 
-## 4. First run
+If you set up Google sign-in before, delete `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`ALLOWED_DOMAIN` and `ADMIN_EMAILS` from Vercel. Nothing reads them any more.
 
-Open the site. You are sent to Google, and back. The first person to sign in becomes an admin,
-as does anyone listed in `ADMIN_EMAILS`.
+## 3. First run
 
-The database tables are created automatically on the first request. Nothing to run by hand.
+Open the site. With no accounts yet, it shows **Set up Review Hub**. Enter your name, email and a
+password, and paste your `SESSION_SECRET` as the setup code. That makes you the first admin. The
+setup code is only asked for once, so a stranger who finds the URL first can't claim the site.
 
-Add teammates from the **Team** page, or just send them the link — anyone on the allowed domain
-who signs in joins as a reviewer.
+The database tables are created automatically on the first request. There's nothing to run by hand.
+
+## 4. Inviting people
+
+Open **Team** (your name in the header, or **Settings → Switch or manage team**).
+
+1. Enter their email (any address, not just arenaclub.com), pick a role and press
+   **Create invite**.
+2. Copy the link, or press **Email it** to open a pre-written email. Send it to them only.
+3. They open the link, type their name and a password, and they're in. From then on they sign in
+   at the site with their email and password.
+
+- **Links:** each link works once, expires after 7 days, and is replaced by any newer link for the
+  same person.
+- **Forgotten passwords:** press **New link** next to their name and send that. Setting a new
+  password signs them out everywhere else.
+- **Removing someone:** **Remove** signs them out within 30 seconds and blocks sign-in. Their
+  posts stay.
+- **Pending invites:** anyone who hasn't joined yet shows *invite pending* on the Team page.
 
 ## How it is put together
 
 ```
 public/index.html   the whole app, one file
-api/login.js        sends you to Google
-api/callback.js     brings you back, checks the domain, sets the cookie
-api/logout.js       clears it
+api/login.js        sign-in page, and first-admin setup
+api/invite.js       invite link: choose name and password, then signed in
+api/logout.js       clears the cookie
 api/session.js      who am I, and who else is on the team
 api/kv.js           read and write the app's data
-api/users.js        add people, change roles
+api/users.js        invite, new link, roles, remove
 api/movers.js       risers & fallers, from a market-data feed you configure
 api/scores.js       live scores for the bottom ticker, from ESPN's public scoreboards
-lib/db.js           Postgres, two tables: kv and users
-lib/auth.js         signed cookie sessions
+lib/db.js           Postgres tables: kv, users, invites
+lib/auth.js         passwords, invite tokens, signed cookie sessions
+lib/page.js         the sign-in and invite pages
 ```
 
-The app keeps its data as JSON under keys in the `kv` table — issues, forum topics, drafts,
+The app keeps its data as JSON under keys in the `kv` table: issues, forum topics, drafts and
 notifications. Photos are stored as data URLs inside those values. Settings that belong to one
-person, such as your chosen font, are stored per email address; everything else is shared.
+person, such as your chosen font, are stored per email address. Everything else is shared.
 
-Sessions are a signed, HttpOnly cookie, valid two weeks. The signature is checked in constant
-time and the domain is enforced on the server, not just hinted to Google.
+**Security:**
+- **Passwords:** hashed with scrypt, at least 10 characters.
+- **Invite links:** stored only as a SHA-256 hash, so a database leak doesn't expose working links.
+- **Sessions:** a signed, HttpOnly, Secure cookie, valid 30 days, re-checked against the database
+  so removal and password resets take effect.
+- **Guessing:** sign-in allows 8 wrong tries per address per 15 minutes.
 
 ## Worth knowing
 
@@ -127,16 +129,18 @@ When that gets tight, move photos to Vercel Blob and keep only the URLs in the r
 so check whether Arena Club needs a Pro seat before this becomes a work tool people rely on.
 
 **Where the data sits.** This puts card photographs and cert numbers on Vercel and Neon rather
-than inside Google Workspace. That is a different answer to the question in the backend brief,
+than inside Arena Club's own systems. That is a different answer to the question in the backend brief,
 and worth clearing with whoever owns data policy before the team starts posting real work.
 
 ## If something goes wrong
 
-- **redirect_uri_mismatch** — the URI in the Google console must match your deployed domain
-  exactly, including `/api/callback`.
+- **"Not set up yet"**: `DATABASE_URL` or `SESSION_SECRET` is missing, or you added them
+  without redeploying.
+- **Locked out with no admin left:** in Neon's SQL editor, run `DELETE FROM users;`. Your data
+  stays, and the site goes back to the **Set up** screen.
 - **"Review Hub could not start"** with a database message — `DATABASE_URL` is wrong or missing,
   or you added it without redeploying.
-- **Signed in as the wrong account** — visit `/api/logout`, then sign in again.
+- **Signed in as the wrong account:** visit `/api/logout`, then sign in again.
 - **Everything loads but nothing saves** — open the browser console. A 401 means the cookie is
   not being set, usually a missing or too-short `SESSION_SECRET`.
 

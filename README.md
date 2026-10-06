@@ -194,6 +194,19 @@ Risers & Fallers never queries Metabase or the public APIs while someone is wait
   character, not one per card. Snowflake does the heavy lifting, and Vercel only receives a few
   thousand rows.
 
+### Look up names (and screenshots)
+
+**Look up names** on the Risers & Fallers page finds any player or character in our own numbers.
+- **Typing:** type names, one per line. Small typos are fine.
+- **Screenshots:** drop, paste or choose a screenshot, such as Alt's trends page. The text is read in
+  the browser with Tesseract (free, with no API key), and every name in it that has our sales data is
+  matched.
+- **Only names are used:** the screenshot's own numbers are ignored. What you see is our completed
+  auctions and comps (PSA, Beckett, SGC, CSG).
+- **Results:** click any result for the card pop-up.
+- **Speed:** look-ups read the saved build (`api/movers-lookup.js`), so they're instant. The first
+  screenshot downloads the text reader once, about 10 MB, and the browser caches it.
+
 ### Free public data (works with no setup)
 
 **Pokémon fills in on its own.** The Pokémon TCG API publishes Cardmarket's average sold prices

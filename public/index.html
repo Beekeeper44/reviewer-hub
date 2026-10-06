@@ -1057,6 +1057,22 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
 .mvm-spark .mvsp{width:220px;max-width:100%;height:42px;margin:0 auto}
 .mvm-link{display:inline-block;text-decoration:none;padding:11px 26px;font-size:15px}
 .mvm-url{margin:8px 0 0;font-size:11.5px;word-break:break-all;opacity:.85}
+
+.mvlook{margin:0 0 18px;padding:16px;border:2px solid var(--green);border-radius:14px;background:var(--box)}
+.mvlook-in{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+html[data-view="mobile"] .mvlook-in{grid-template-columns:1fr}
+.mvlook-col{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.mvlook textarea{width:100%;box-sizing:border-box;min-height:132px;padding:10px 12px;border-radius:10px;border:1.5px solid var(--hair);
+  background:var(--well);color:var(--ink);font:inherit;font-size:14px;resize:vertical}
+.mvdrop{flex:1;min-height:132px;border:2px dashed var(--hair);border-radius:10px;display:grid;place-items:center;
+  text-align:center;padding:12px;font-size:12.5px;line-height:1.5;cursor:pointer;background:var(--well)}
+.mvdrop.over,.mvdrop:hover,.mvdrop:focus-visible{border-color:var(--green);outline:none}
+.mvdrop-img{max-width:100%;max-height:120px;border-radius:6px;margin-bottom:4px}
+.mvlook-sum{margin:14px 0 8px;font-size:13px}
+.mvlook-miss{margin:8px 0 0;font-size:12.5px}
+.mvlook-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0 18px}
+.mvlook-list li{border-top:1px solid var(--hair);grid-template-columns:34px 46px minmax(0,1fr)}
+.mvcat-tag{font-size:10px!important;letter-spacing:.04em;border:1px solid var(--hair);border-radius:5px;padding:3px 0}
 </style>
 </head>
 <body>
@@ -1352,6 +1368,7 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
   <div class="sheet-top">
     <button class="btn" id="mvClose">&larr; Back</button>
     <h2>Risers &amp; Fallers</h2>
+    <button class="btn" id="mvLookBtn">Look up names</button>
     <a class="btn" href="https://alt.xyz/market-trends" target="_blank" rel="noopener" style="text-decoration:none">Alt market trends &#8599;</a>
     <button class="btn" id="mvRefresh">Refresh</button>
   </div>
@@ -1361,6 +1378,30 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
       <button class="up" data-side="up" role="tab"><span class="ar">&#9650;</span> Risers</button>
       <button class="down" data-side="down" role="tab"><span class="ar">&#9660;</span> Fallers</button>
     </div></div>
+    <section class="mvlook" id="mvLook" hidden>
+      <div class="mvlook-in">
+        <div class="mvlook-col">
+          <label for="mvLookText"><b>Type names</b>, one per line</label>
+          <textarea id="mvLookText" rows="6" placeholder="Pete Crow-Armstrong&#10;Monkey.D.Luffy&#10;Charizard"></textarea>
+        </div>
+        <div class="mvlook-col">
+          <b>Or drop a screenshot</b>
+          <div class="mvdrop" id="mvDrop" tabindex="0" role="button" aria-label="Drop, paste or choose a screenshot">
+            <span id="mvDropMsg">Drop an image here, paste with Cmd/Ctrl + V, or click to choose.<br>
+              The text is read in your browser. Only the names are used, matched to our own sales.</span>
+            <input type="file" id="mvDropIn" accept="image/*" hidden>
+          </div>
+        </div>
+      </div>
+      <div class="trow" style="margin:10px 0 0;justify-content:flex-end;gap:8px">
+        <select id="mvLookCat" class="rolesel"><option value="all">All categories</option><option value="baseball">Baseball</option>
+          <option value="basketball">Basketball</option><option value="football">Football</option>
+          <option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option></select>
+        <button class="btn" id="mvLookClear">Clear</button>
+        <button class="btn go" id="mvLookGo">Find in our data</button>
+      </div>
+      <div id="mvLookOut"></div>
+    </section>
     <div id="mvBody"></div>
     <p class="mvnote" id="mvNote"></p>
   </div>
@@ -2065,6 +2106,92 @@ document.getElementById("movers").addEventListener("click",e=>{
   const row=e.target.closest("[data-mvrow]");
   if(row)mvOpen(+row.dataset.mvrow);
 });
+
+/* ---------- look up names (typed, or read off a screenshot in the browser) ---------- */
+let tessLoading=null;
+function loadTesseract(){
+  if(window.Tesseract)return Promise.resolve(window.Tesseract);
+  if(tessLoading)return tessLoading;
+  tessLoading=new Promise((ok,bad)=>{
+    const sc=document.createElement("script");
+    sc.src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    sc.onload=()=>ok(window.Tesseract);sc.onerror=()=>{tessLoading=null;bad(new Error("Could not load the text reader."))};
+    document.head.appendChild(sc);
+  });
+  return tessLoading;
+}
+async function mvReadImage(file){
+  if(!file||!/^image\//.test(file.type)){toast("That isn't an image.");return}
+  const msg=document.getElementById("mvDropMsg");
+  const url=URL.createObjectURL(file);
+  msg.innerHTML=`<img src="${url}" alt="" class="mvdrop-img"><br><span id="mvOcrPct">Reading text…</span>`;
+  try{
+    const T=await loadTesseract();
+    const r=await T.recognize(file,"eng",{logger:m=>{
+      const el=document.getElementById("mvOcrPct");
+      if(el&&m.status==="recognizing text")el.textContent="Reading text… "+Math.round(m.progress*100)+"%";
+      else if(el&&m.status)el.textContent=m.status.replace(/^\w/,c=>c.toUpperCase())+"…";
+    }});
+    const text=(r&&r.data&&r.data.text)||"";
+    const el=document.getElementById("mvOcrPct");if(el)el.textContent="Done. Matching names…";
+    await mvLookup(text,true);
+    if(el)el.textContent="Read "+text.split(/\n/).filter(Boolean).length+" lines.";
+  }catch(e){
+    msg.textContent=(e&&e.message)||"Could not read that image.";
+  }
+}
+async function mvLookup(text,fromImage){
+  const out=document.getElementById("mvLookOut");
+  if(!text.trim()){toast("Type a name or drop a screenshot first.");return}
+  out.innerHTML=`<div class="mvempty">Searching…</div>`;
+  let d;
+  try{
+    const r=await fetch("/api/movers-lookup",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({text,category:document.getElementById("mvLookCat").value})});
+    d=await r.json();
+  }catch(e){d={ok:false,why:"The server did not respond."}}
+  if(!d.ok){out.innerHTML=`<div class="mvempty">${esc(d.why||"Look-up failed.")}</div>`;return}
+  for(const [k,v] of Object.entries(d.labels||{}))mvMeta[k]=Object.assign(mvMeta[k]||{},v);
+  const lab=c=>((d.labels||{})[c]||{}).label||c;
+  const head=`<p class="mvlook-sum"><b>${d.hits.length}</b> match${d.hits.length===1?"":"es"} in our data${
+    fromImage?" from the screenshot":""}. Our numbers: completed auctions and comps, PSA / Beckett / SGC / CSG.</p>`;
+  const miss=!fromImage&&d.missed&&d.missed.length?`<p class="mvlook-miss">No data for: ${d.missed.map(esc).join(", ")}</p>`:"";
+  if(!d.hits.length){out.innerHTML=head+miss;return}
+  out.innerHTML=head+`<ol class="mvlist mvlook-list">${d.hits.map(x=>{
+    const up=x.change30>=0,vl=((mvMeta[x.category]||{}).volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
+    return `<li data-mvrow="${mvRows.push({x,up,cat:x.category})-1}" tabindex="0" title="Click to see the card">
+      <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"MLB",basketball:"NBA",football:"NFL",pokemon:"PKM",onepiece:"OP"})[x.category]||""}</span>
+      <img src="${esc(x.image||x.card_image||mvArt(x.name,x.category))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,x.category))}"
+        onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
+      <span class="bd"><b>${esc(x.name)}</b>
+        <span class="mt"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
+          <span class="vol">${x.volume30.toLocaleString()} ${esc(vl)}</span></span>
+        <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`}).join("")}</ol>`+miss;
+}
+document.getElementById("mvLookBtn").onclick=()=>{
+  const p=document.getElementById("mvLook");p.hidden=!p.hidden;
+  if(!p.hidden)document.getElementById("mvLookText").focus();
+};
+document.getElementById("mvLookGo").onclick=()=>mvLookup(document.getElementById("mvLookText").value,false);
+document.getElementById("mvLookClear").onclick=()=>{
+  document.getElementById("mvLookText").value="";document.getElementById("mvLookOut").innerHTML="";
+  document.getElementById("mvDropMsg").innerHTML="Drop an image here, paste with Cmd/Ctrl + V, or click to choose.<br>The text is read in your browser. Only the names are used, matched to our own sales.";
+};
+(()=>{
+  const dz=document.getElementById("mvDrop"),fi=document.getElementById("mvDropIn");
+  dz.onclick=()=>fi.click();
+  dz.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();fi.click()}};
+  fi.onchange=()=>{if(fi.files[0])mvReadImage(fi.files[0]);fi.value=""};
+  ["dragenter","dragover"].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.add("over")}));
+  ["dragleave","drop"].forEach(t=>dz.addEventListener(t,e=>{e.preventDefault();dz.classList.remove("over")}));
+  dz.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)mvReadImage(f)});
+  document.addEventListener("paste",e=>{
+    const panel=document.getElementById("mvLook");
+    if(panel.hidden||document.getElementById("movers").dataset.open!=="true")return;
+    const f=[...(e.clipboardData||{}).items||[]].find(i=>i.type&&i.type.startsWith("image/"));
+    if(f){e.preventDefault();mvReadImage(f.getAsFile())}
+  });
+})();
 /* ================= header nav ================= */
 function renderNav(){
   const url=k=>state.links[k]||"";

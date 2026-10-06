@@ -40,6 +40,7 @@ const TOP = 10;
 // someone waits. It runs on a schedule (vercel.json "crons") and the result is saved to Postgres.
 // Page loads just read that saved snapshot, which takes tens of milliseconds.
 const SNAP = 'sys:movers:snapshot';
+export const INDEX = 'sys:movers:index';     // every qualifying name, for look-ups
 let memo = null;                                   // per-instance copy of the snapshot
 const MEMO_TTL = 60 * 1000;
 
@@ -120,10 +121,13 @@ async function build() {
     catch (e) { errors.push('Pokémon public data: ' + (e.message || e)); }
   }
 
+  const index = [];
   const categories = CATS.map(c => {
     const pool = rows.filter(x => catOf(x.category) === c.id).map(clean)
       .filter(x => x.name && Number.isFinite(x.change30) &&
         x.volume30 >= (notes[c.id] ? 3 : MIN_VOLUME));        // public Pokémon: 3+ cards per character
+    for (const x of pool) index.push({ category: c.id, name: x.name, change30: x.change30, volume30: x.volume30,
+      spark: x.spark.length > 20 ? x.spark.slice(-20) : x.spark, url: x.url, card_image: x.card_image, card_title: x.card_title });
     const up = pool.filter(x => x.change30 > 0).sort((a, b) => score(b) - score(a)).slice(0, TOP);
     const down = pool.filter(x => x.change30 < 0).sort((a, b) => score(a) - score(b)).slice(0, TOP);
     return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down,
@@ -133,18 +137,24 @@ async function build() {
   if (!categories.some(c => c.risers.length || c.fallers.length))
     return { ok: false, why: errors.length ? errors.join(' · ') : 'no-source' };
   await Promise.all(categories.map(c => addImages([...c.risers, ...c.fallers], c.id)));
-  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories, feedError, cfg: config() };
+  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories, feedError, cfg: config(),
+    _index: index };
 }
 
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v7'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v8'].join('|');
 }
 export async function rebuild() {
   const body = await build();
   body.builtAt = new Date().toISOString();
-  if (body.ok) await kvSet(SNAP, JSON.stringify(body));   // a failed build never replaces good data
+  const index = body._index || []; delete body._index;
+  if (body.ok) {                                          // a failed build never replaces good data
+    await kvSet(SNAP, JSON.stringify(body));
+    await kvSet(INDEX, JSON.stringify({ builtAt: body.builtAt, rows: index, labels: Object.fromEntries(
+      body.categories.map(c => [c.id, { label: c.label, volLabel: c.volLabel }])) }));
+  }
   memo = null;
   return body;
 }

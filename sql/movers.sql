@@ -27,8 +27,9 @@
     change30 = median(hammer ÷ EV, last 30 days) ÷ median(hammer ÷ EV, days 31–60) − 1
     volume30 = auction sales + distinct comps in the last 30 days
     spark    = weekly median hammer ÷ EV over the last 13 weeks
-    image    = slab photo of the most recent sale (the app swaps in ESPN /
-               Wikipedia / TCG pictures when it finds them)
+    image / card_image = slab photo of the most recently sold card (the app shows an
+               ESPN / Wikipedia / TCG picture in the list and this card in the pop-up)
+    card_title = that card: set, name, parallel, grade
     url      = public page of the most recently sold card
 
   Output columns are quoted lowercase so the JSON keys match the app.
@@ -36,7 +37,8 @@
   ======================================================================*/
 WITH cards AS (
   SELECT
-    id, number, sport, set_name, player_name, front_slab_picture_url, estimated_value_cents,
+    id, number, sport, set_name, player_name, parallel_name, grading_company, overall,
+    front_slab_picture_url, estimated_value_cents,
     CASE
       WHEN sport ILIKE '%baseball%'                                 THEN 'baseball'
       WHEN sport ILIKE '%basketball%'                               THEN 'basketball'
@@ -84,6 +86,9 @@ sales AS (
          x.d,
          x.evt_at                                               AS end_at,
          c.front_slab_picture_url                               AS pic,
+         TRIM(COALESCE(c.set_name, '') || ' ' || COALESCE(c.player_name, '')
+              || COALESCE(' ' || NULLIF(c.parallel_name, ''), '')
+              || COALESCE(' ' || c.grading_company || ' ' || c.overall, ''))  AS card_title,
          'https://arenaclub.com/cards/'
            || TRIM(LOWER(REGEXP_REPLACE(c.sport || '-' || c.set_name || '-' || c.player_name,
                                         '[^A-Za-z0-9]+', '-')), '-')
@@ -103,7 +108,8 @@ win AS (
     COUNT_IF(d >  DATEADD(day, -30, CURRENT_DATE()))                                                           AS volume30,
     COUNT_IF(d <= DATEADD(day, -30, CURRENT_DATE()) AND d > DATEADD(day, -60, CURRENT_DATE()))                 AS prev_n,
     MAX_BY(pic, end_at)                                                                                        AS image,
-    MAX_BY(url, end_at)                                                                                        AS url
+    MAX_BY(url, end_at)                                                                                        AS url,
+    MAX_BY(card_title, end_at)                                                                                 AS card_title
   FROM s
   GROUP BY category, name
 ),
@@ -122,6 +128,8 @@ SELECT
   w.volume30                                          AS "volume30",
   w.image                                             AS "image",
   w.url                                               AS "url",
+  w.image                                             AS "card_image",
+  w.card_title                                        AS "card_title",
   sp.spark                                            AS "spark"
 FROM   win w
 JOIN   spark sp ON sp.category = w.category AND sp.name = w.name

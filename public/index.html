@@ -1038,6 +1038,25 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
 .mvlist .sp{display:block;margin-top:2px}
 .mvlist .mvsp,.mvsecgrid.split .mvlist .mvsp{width:100%;max-width:160px;height:24px;margin:0}
 @media (max-height:960px){.mvlist li{padding:8px 4px}.mvlist img{width:40px;height:56px}.mvlist .mvsp{height:20px}}
+
+.mvlist li,.mvtbl tr[data-mvrow]{cursor:pointer}
+.mvlist li:hover,.mvlist li:focus-visible{background:var(--well);outline:none}
+.mvmodal{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:20px}
+.mvm-box{position:relative;background:var(--box);border:1px solid var(--hair);border-radius:16px;
+  width:min(440px,100%);max-height:calc(100vh - 40px);overflow-y:auto;padding:22px 22px 18px;text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.mvm-x{position:absolute;top:10px;right:12px;width:34px;height:34px;border-radius:50%;border:1px solid var(--hair);
+  background:var(--well);color:var(--ink);font-size:22px;line-height:1;cursor:pointer}
+.mvm-card{display:block;margin:4px auto 14px;max-width:100%;max-height:58vh;border-radius:10px;
+  box-shadow:0 6px 24px rgba(0,0,0,.45);background:var(--sunk)}
+.mvm-body h3{margin:0 0 4px;font-size:22px}
+.mvm-title{margin:0 0 8px;font-size:13.5px;line-height:1.4}
+.mvm-stats{display:flex;justify-content:center;gap:12px;align-items:baseline;margin:0 0 6px;font-weight:600}
+.mvm-stats .mvchg{font-size:18px}
+.mvm-spark{display:flex;justify-content:center;margin:0 0 14px}
+.mvm-spark .mvsp{width:220px;max-width:100%;height:42px;margin:0 auto}
+.mvm-link{display:inline-block;text-decoration:none;padding:11px 26px;font-size:15px}
+.mvm-url{margin:8px 0 0;font-size:11.5px;word-break:break-all;opacity:.85}
 </style>
 </head>
 <body>
@@ -1326,6 +1345,9 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
 </div>
 
 <!-- drafts -->
+<div class="mvmodal" id="mvModal" hidden role="dialog" aria-modal="true" aria-label="Card">
+  <div class="mvm-box"><button class="mvm-x" aria-label="Close">&times;</button><div class="mvm-body"></div></div>
+</div>
 <div class="sheet" id="movers" role="dialog" aria-label="Risers and fallers">
   <div class="sheet-top">
     <button class="btn" id="mvClose">&larr; Back</button>
@@ -1936,21 +1958,21 @@ function mvTable(rows,up,n,cat){
   return `<table class="mvtbl"><thead><tr>
       <th>${up?"Rising":"Falling"}</th><th class="r">30 day change</th>
       <th class="r hv">30d sales</th><th class="r hv">90 day trend</th></tr></thead><tbody>${
-    rows.map(x=>`<tr title="${esc(x.name)} · ${x.volume30.toLocaleString()} sales in 30 days" ${x.url?`data-url="${esc(x.url)}"`:""}>
+    rows.map(x=>`<tr title="${esc(x.name)} · ${x.volume30.toLocaleString()} sales in 30 days · click to see the card" data-mvrow="${mvRows.push({x,up,cat})-1}" tabindex="0">
       <td><span class="mvwho"><img src="${esc(x.image||mvArt(x.name,cat))}" alt="" loading="lazy"
           data-fb="${esc(mvArt(x.name,cat))}" onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb"><span>${esc(x.name)}</span></span></td>
       <td class="r"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span></td>
       <td class="r hv"><span class="mvvol">${x.volume30.toLocaleString()}</span></td>
       <td class="r hv">${mvSpark(x.spark,up)}</td></tr>`).join("")}</tbody></table>`;
 }
-let mvMeta={};
+let mvMeta={},mvRows=[];
 function mvList(rows,up,n,cat,start){
   start=start||0;rows=(rows||[]).slice(0,n);
   const meta=mvMeta[cat]||{};
   if(!rows.length)return `<div class="mvempty">${esc(meta.note||"Nothing qualifies yet.")}</div>`;
   const vl=n=>(meta.volLabel||"sales").replace(/s$/,n===1?"":"s");
-  return `<ol class="mvlist">${rows.map((x,i)=>`<li title="${esc(x.name)} · ${x.volume30.toLocaleString()} ${esc(vl(x.volume30))} in 30 days"
-      ${x.url?`data-url="${esc(x.url)}"`:""}>
+  return `<ol class="mvlist">${rows.map((x,i)=>`<li title="${esc(x.name)} · ${x.volume30.toLocaleString()} ${esc(vl(x.volume30))} in 30 days · click to see the card"
+      data-mvrow="${mvRows.push({x,up,cat})-1}" tabindex="0">
     <span class="rk">${start+i+1}</span>
     <img src="${esc(x.image||mvArt(x.name,cat))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,cat))}"
       onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
@@ -1960,6 +1982,7 @@ function mvList(rows,up,n,cat,start){
       <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`).join("")}</ol>`;
 }
 function renderMovers(){
+  mvRows=[];
   const d=mvData,tabs=document.getElementById("mvTabs"),body=document.getElementById("mvBody"),
     note=document.getElementById("mvNote");
   const cats=(d&&d.ok&&d.categories)||[];
@@ -1995,12 +2018,38 @@ function renderMovers(){
     const on=b.dataset.side===mvSide;b.setAttribute("aria-selected",on);b.setAttribute("aria-pressed",on)});
   body.innerHTML=section(mvSide==="up");
 }
+function mvOpen(i){
+  const it=mvRows[i];if(!it)return;
+  const {x,up,cat}=it,meta=mvMeta[cat]||{};
+  const card=x.card_image||x.image||mvArt(x.name,cat);
+  const vlab=(meta.volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
+  const m=document.getElementById("mvModal");
+  m.querySelector(".mvm-body").innerHTML=`
+    <img class="mvm-card" src="${esc(card)}" alt="${esc(x.card_title||x.name)}" data-fb="${esc(x.image||mvArt(x.name,cat))}"
+      onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
+    <h3>${esc(x.name)}</h3>
+    ${x.card_title?`<p class="mvm-title">${esc(x.card_title)}</p>`:""}
+    <p class="mvm-stats"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
+      <span>${x.volume30.toLocaleString()} ${esc(vlab)} in 30 days</span></p>
+    <div class="mvm-spark">${mvSpark(x.spark,up)}</div>
+    ${x.url?`<a class="btn go mvm-link" href="${esc(x.url)}" target="_blank" rel="noopener">Open card &#8599;</a>
+      <p class="mvm-url">${esc(x.url)}</p>`:`<p class="mvm-url">No card link for this one.</p>`}`;
+  m.hidden=false;m.querySelector(".mvm-x").focus();
+}
+function mvClose(){document.getElementById("mvModal").hidden=true}
 async function openMovers(){
   openSheet("movers");
   if(!mvData)document.getElementById("mvBody").innerHTML=`<div class="mvempty">Loading market data…</div>`;
   await loadMovers();renderMovers();
 }
 document.getElementById("mvClose").onclick=()=>closeSheet("movers");
+document.getElementById("movers").addEventListener("keydown",e=>{
+  const row=e.target.closest&&e.target.closest("[data-mvrow]");
+  if(row&&(e.key==="Enter"||e.key===" ")){e.preventDefault();mvOpen(+row.dataset.mvrow)}
+});
+document.getElementById("mvModal").addEventListener("click",e=>{
+  if(e.target.id==="mvModal"||e.target.closest(".mvm-x"))mvClose()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!document.getElementById("mvModal").hidden)mvClose()});
 document.getElementById("mvRefresh").onclick=async()=>{
   const admin=isAdmin();
   if(admin)toast("Rebuilding from the data sources. This can take up to a minute…");
@@ -2013,8 +2062,8 @@ document.getElementById("movers").addEventListener("click",e=>{
   if(c){mvCat=c;renderMovers();document.getElementById("movers").scrollTo({top:0});return}
   const sd=e.target.closest("[data-side]")?.dataset.side;
   if(sd){mvSide=sd;renderMovers();return}
-  const u=e.target.closest("tr[data-url],li[data-url]")?.dataset.url;
-  if(u)window.open(u,"_blank","noopener");
+  const row=e.target.closest("[data-mvrow]");
+  if(row)mvOpen(+row.dataset.mvrow);
 });
 /* ================= header nav ================= */
 function renderNav(){

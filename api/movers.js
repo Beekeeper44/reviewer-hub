@@ -63,6 +63,8 @@ function clean(r) {
     name: String(r.name || '').slice(0, 80),
     image: typeof r.image === 'string' && /^https:\/\//.test(r.image) ? r.image : '',
     url: typeof r.url === 'string' && /^https:\/\//.test(r.url) ? r.url : '',
+    card_image: typeof (r.card_image || r.image) === 'string' && /^https:\/\//.test(r.card_image || r.image) ? (r.card_image || r.image) : '',
+    card_title: String(r.card_title || '').slice(0, 160),
     change30: Number(r.change30),
     volume30: Math.round(Number(r.volume30) || 0),
     spark: spark.length > 120 ? spark.slice(-120) : spark,
@@ -137,7 +139,7 @@ async function build() {
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v5'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v7'].join('|');
 }
 export async function rebuild() {
   const body = await build();

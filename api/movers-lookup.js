@@ -56,28 +56,36 @@ export default requireUser(async function (req, res) {
   try {
     const b = req.method === 'POST' ? readBody(req) : req.query;
     const text = String(b.text || '').slice(0, 20000);
-    const cat = String(b.category || '');
+    let cat = String(b.category || '');
+    const typed = !(b.image === true || b.image === 'true');
     const { data, prepared } = await index();
     if (!data.rows.length) { res.status(200).json({ ok: false, why: 'No Risers & Fallers build yet. Open the page and press Refresh first.' }); return; }
 
     const rawLines = text.split(/\n+/).map(x => x.trim()).filter(x => norm(x));
     const lines = rawLines.map(norm);
     const lineToks = lines.map(l => l.split(' '));
-    const seen = new Map();
-    for (const p of prepared) {
-      if (cat && cat !== 'all' && p.r.category !== cat) continue;
-      let best = 0, at = -1;
-      for (let i = 0; i < lineToks.length; i++) {
-        const sc = scoreLine(p.toks, lineToks[i]);
-        if (sc > best) { best = sc; at = i; }
+    const run = (onlyCat) => {
+      const seen = new Map();
+      for (const p of prepared) {
+        if (onlyCat && onlyCat !== 'all' && p.r.category !== onlyCat) continue;
+        let best = 0, at = -1;
+        for (let i = 0; i < lineToks.length; i++) {
+          let sc = scoreLine(p.toks, lineToks[i]);
+          // typed names can be partial: "Charizard" finds "Charizard ex", "Charizard VMAX", "Mega Charizard"
+          if (!sc && typed && lineToks[i].every(t => t.length >= 3)) sc = scoreLine(lineToks[i], p.toks) ? 0.5 : 0;
+          if (sc > best) { best = sc; at = i; }
+        }
+        if (!best) continue;
+        const key = p.r.category + '|' + p.r.name;
+        if (!seen.has(key)) seen.set(key, { ...p.r, _line: at, _len: p.toks.length, _partial: best === 0.5 });
       }
-      if (!best) continue;
-      const key = p.r.category + '|' + p.r.name;
-      if (!seen.has(key)) seen.set(key, { ...p.r, _line: at, _len: p.toks.length });
-    }
+      return seen;
+    };
+    let seen = run(cat), widened = false;
+    if (!seen.size && cat && cat !== 'all') { seen = run('all'); widened = seen.size > 0; }
     // if "Luffy" and "Monkey D Luffy" both matched the same line, keep the longer name
     let hits = [...seen.values()];
-    hits = hits.filter(h => !hits.some(o => o !== h && o._line === h._line && o._len > h._len &&
+    hits = hits.filter(h => h._partial || !hits.some(o => o !== h && !o._partial && o._line === h._line && o._len > h._len &&
       norm(o.name).includes(norm(h.name))));
     hits.sort((a, b) => a._line - b._line || b.volume30 - a.volume30);
     hits = hits.slice(0, 40);
@@ -91,9 +99,9 @@ export default requireUser(async function (req, res) {
       await Promise.all(hits.slice(i, i + 5).map(async h => {
         h.image = (await imageFor(h.name, h.category).catch(() => '')) || h.card_image || '';
       }));
-    for (const h of hits) { delete h._line; delete h._len; }
+    for (const h of hits) { delete h._line; delete h._len; delete h._partial; }
     res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ ok: true, builtAt: data.builtAt, labels: data.labels, hits, missed });
+    res.status(200).json({ ok: true, builtAt: data.builtAt, labels: data.labels, hits, missed, widened });
   } catch (e) {
     res.status(200).json({ ok: false, why: String(e && e.message || e) });
   }

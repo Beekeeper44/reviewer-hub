@@ -144,7 +144,7 @@ async function build() {
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v8'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v9'].join('|');
 }
 export async function rebuild() {
   const body = await build();

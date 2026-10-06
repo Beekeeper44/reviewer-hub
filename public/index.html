@@ -1073,6 +1073,16 @@ html[data-view="mobile"] .mvlook-in{grid-template-columns:1fr}
 .mvlook-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0 18px}
 .mvlook-list li{border-top:1px solid var(--hair);grid-template-columns:34px 46px minmax(0,1fr)}
 .mvcat-tag{font-size:10px!important;letter-spacing:.04em;border:1px solid var(--hair);border-radius:5px;padding:3px 0}
+
+.mvlook-split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
+.mvlook-side{border:1px solid var(--hair);border-radius:12px;padding:12px 12px 4px;background:var(--well)}
+.mvlook-side h4{display:flex;align-items:center;gap:10px;margin:0 0 6px;font-size:17px}
+.mvlook-side h4 small{font-size:12px;font-weight:700;margin-left:auto}
+.mvlook-side.up h4{color:var(--up)}.mvlook-side.down h4{color:var(--down)}
+.mvlook-side .mvarrow{width:28px;height:28px;font-size:13px;border:2.5px solid currentColor;background:none!important;color:inherit!important;border-radius:50%;display:inline-grid;place-items:center}
+.mvlook-side .mvlist li{grid-template-columns:34px 46px minmax(0,1fr)}
+.mvchg.flat{color:var(--ink)}
 </style>
 </head>
 <body>
@@ -2147,30 +2157,37 @@ async function mvLookup(text,fromImage){
   let d;
   try{
     const r=await fetch("/api/movers-lookup",{method:"POST",headers:{"content-type":"application/json"},
-      body:JSON.stringify({text,category:document.getElementById("mvLookCat").value})});
+      body:JSON.stringify({text,image:!!fromImage,category:document.getElementById("mvLookCat").value})});
     d=await r.json();
   }catch(e){d={ok:false,why:"The server did not respond."}}
   if(!d.ok){out.innerHTML=`<div class="mvempty">${esc(d.why||"Look-up failed.")}</div>`;return}
   for(const [k,v] of Object.entries(d.labels||{}))mvMeta[k]=Object.assign(mvMeta[k]||{},v);
   const lab=c=>((d.labels||{})[c]||{}).label||c;
   const head=`<p class="mvlook-sum"><b>${d.hits.length}</b> match${d.hits.length===1?"":"es"} in our data${
-    fromImage?" from the screenshot":""}. Our numbers: completed auctions and comps, PSA / Beckett / SGC / CSG.</p>`;
+    fromImage?" from the screenshot":""}${d.widened?` (none in ${esc(document.getElementById("mvLookCat").selectedOptions[0].text)}, so all categories were searched)`:""}. Our numbers: completed auctions and comps, PSA / Beckett / SGC / CSG.</p>`;
   const miss=!fromImage&&d.missed&&d.missed.length?`<p class="mvlook-miss">No data for: ${d.missed.map(esc).join(", ")}</p>`:"";
   if(!d.hits.length){out.innerHTML=head+miss;return}
-  out.innerHTML=head+`<ol class="mvlist mvlook-list">${d.hits.map(x=>{
+  const li=x=>{
     const up=x.change30>=0,vl=((mvMeta[x.category]||{}).volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
     return `<li data-mvrow="${mvRows.push({x,up,cat:x.category})-1}" tabindex="0" title="Click to see the card">
       <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"MLB",basketball:"NBA",football:"NFL",pokemon:"PKM",onepiece:"OP"})[x.category]||""}</span>
       <img src="${esc(x.image||x.card_image||mvArt(x.name,x.category))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,x.category))}"
         onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
       <span class="bd"><b>${esc(x.name)}</b>
-        <span class="mt"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
+        <span class="mt"><span class="mvchg ${x.change30>0?"up":x.change30<0?"down":"flat"}">${x.change30>0?"&#9650;":x.change30<0?"&#9660;":"&#9644;"} ${mvPct(x.change30)}</span>
           <span class="vol">${x.volume30.toLocaleString()} ${esc(vl)}</span></span>
-        <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`}).join("")}</ol>`+miss;
+        <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`};
+  const ris=d.hits.filter(x=>x.change30>0).sort((a,b)=>b.change30-a.change30);
+  const fal=d.hits.filter(x=>x.change30<0).sort((a,b)=>a.change30-b.change30);
+  const flat=d.hits.filter(x=>x.change30===0);
+  const col=(cls,title,arr)=>`<div class="mvlook-side ${cls}"><h4><span class="mvarrow">${cls==="up"?"&#9650;":"&#9660;"}</span>${title}
+      <small>${arr.length}</small></h4>${arr.length?`<ol class="mvlist">${arr.map(li).join("")}</ol>`:`<div class="mvempty">None in this list.</div>`}</div>`;
+  out.innerHTML=head+`<div class="mvlook-split">${col("up","Risers",ris)}${col("down","Fallers",fal)}</div>`+
+    (flat.length?`<p class="mvlook-miss">No change: ${flat.map(x=>esc(x.name)).join(", ")}</p>`:"")+miss;
 }
 document.getElementById("mvLookBtn").onclick=()=>{
   const p=document.getElementById("mvLook");p.hidden=!p.hidden;
-  if(!p.hidden)document.getElementById("mvLookText").focus();
+  if(!p.hidden){document.getElementById("mvLookCat").value="all";document.getElementById("mvLookText").focus()}
 };
 document.getElementById("mvLookGo").onclick=()=>mvLookup(document.getElementById("mvLookText").value,false);
 document.getElementById("mvLookClear").onclick=()=>{

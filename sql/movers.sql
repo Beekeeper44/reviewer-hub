@@ -1,68 +1,131 @@
--- Risers & Fallers feed, from Arena Club's own market data (Snowflake APP_PROD, Metabase db 397).
--- Source: APP_PROD.ADMIN.COMPS (130M external sold prices) joined to APP_PROD.ADMIN.CARD_TYPES (player / sport).
---
--- ⚠ STEP 0: the data dictionary doesn't list COMPS' columns, so three names below are best guesses.
---    Run this first and fix the three marked lines if they differ:
---
---    SELECT table_name, column_name, data_type FROM APP_PROD.information_schema.columns
---    WHERE table_schema='ADMIN' AND table_name IN ('COMPS','CARD_TYPES') ORDER BY 1,2;
---
---    ① COMPS.CARD_TYPE_ID  the key to CARD_TYPES.ID
---    ② COMPS.PRICE_CENTS   the sold price
---    ③ COMPS.SOLD_AT       the sale date. Check its type: NTZ needs the 3-arg CONVERT_TIMEZONE below,
---                          LTZ the 2-arg form (dialect §2.5)
---    ④ ADMIN.CARDS.FRONT_PICTURE_URL  a card photo, used as the row image (any *_picture_url on admin.cards)
---    Also confirm CARD_TYPES has PLAYER_NAME and SPORT (same values as admin.cards.sport).
---
--- Method: prices are indexed per card type (each sale ÷ that card type's 90-day median), so a player's
--- number isn't skewed by which cards happened to sell. 30-day change = median index over the last 30
--- days vs the 30 days before. Output column names are quoted lowercase so the JSON keys match the app.
+/*======================================================================
+  Review Hub — RISERS & FALLERS feed
+  Snowflake APP_PROD · save as a Metabase question on database 397
 
-WITH s AS (
+  GRADERS: PSA, Beckett (BGS / BVG / BCCG), SGC and CSG slabs only. Arena Club grades
+           and raw cards are excluded, so the market read isn't tied to our own grades.
+
+  TWO KINDS OF REAL MARKET PRICE, unioned:
+
+   1. AUCTIONS  — Arena Club's completed card auctions (public.auction): status
+                  'completed' with a winning bid. Live bids, reserve-not-met,
+                  cancelled and expired-payment auctions are left out.
+                  Same tables as the "ALL AUCTIONS" question.
+   2. LAST COMPS — the market comp the grading team records on every approved EV
+                  or recomp (admin.estimated_value.last_comp_value_cents, statuses
+                  'approved' / 'done_skip_verify'), dated by finished_at. Same
+                  source as LAST_COMP in the inventory question (4131), but across
+                  every card and every recomp, not just today's warehouse.
+                  A recomp that repeats the same comp for the same card is counted
+                  once, so re-approvals don't inflate volume.
+
+  WHY RATIOS: every sale is divided by that card's estimated value, so a player's
+  number isn't skewed by which cards happened to sell (a $2,000 rookie one month,
+  $40 base cards the next). The EV is just a fixed yardstick per card; what moves is
+  how far above or below it the hammer lands.
+
+    change30 = median(hammer ÷ EV, last 30 days) ÷ median(hammer ÷ EV, days 31–60) − 1
+    volume30 = auction sales + distinct comps in the last 30 days
+    spark    = weekly median hammer ÷ EV over the last 13 weeks
+    image    = slab photo of the most recent sale (the app swaps in ESPN /
+               Wikipedia / TCG pictures when it finds them)
+    url      = public page of the most recently sold card
+
+  Output columns are quoted lowercase so the JSON keys match the app.
+  Returns one row per player / character, a few thousand rows at most.
+  ======================================================================*/
+WITH cards AS (
   SELECT
-    ct.PLAYER_NAME                                   AS name,
-    LOWER(ct.SPORT)                                  AS sport,
-    c.CARD_TYPE_ID                                   AS ctid,                    -- ①
-    c.PRICE_CENTS / 100.0                            AS price,                   -- ②
-    CONVERT_TIMEZONE('UTC','America/Los_Angeles', c.SOLD_AT)::DATE AS d          -- ③ (NTZ form)
-  FROM APP_PROD.ADMIN.COMPS c
-  JOIN APP_PROD.ADMIN.CARD_TYPES ct
-    ON ct.ID = c.CARD_TYPE_ID AND NOT COALESCE(ct._SNOWFLAKE_DELETED, FALSE)
-  WHERE NOT COALESCE(c._SNOWFLAKE_DELETED, FALSE)
-    AND c.SOLD_AT >= DATEADD(day, -91, CURRENT_DATE())
-    AND c.PRICE_CENTS > 0
-    AND ct.PLAYER_NAME IS NOT NULL
-    AND LOWER(ct.SPORT) IN ('baseball','basketball','football','pokemon','one_piece')
-),
-base AS (SELECT ctid, MEDIAN(price) AS med90 FROM s GROUP BY ctid),
-idx  AS (SELECT s.*, s.price / NULLIF(b.med90, 0) AS ix FROM s JOIN base b ON b.ctid = s.ctid),
-win  AS (
-  SELECT sport, name,
-    MEDIAN(IFF(d >  DATEADD(day,-30,CURRENT_DATE()), ix, NULL))                                        AS now_ix,
-    MEDIAN(IFF(d <= DATEADD(day,-30,CURRENT_DATE()) AND d > DATEADD(day,-60,CURRENT_DATE()), ix, NULL)) AS prev_ix,
-    COUNT_IF(d > DATEADD(day,-30,CURRENT_DATE()))                                                      AS volume30
-  FROM idx GROUP BY sport, name
-),
-daily AS (SELECT sport, name, d, MEDIAN(ix) AS dix FROM idx GROUP BY sport, name, d),
-pic AS (   -- one real card photo per player: the most recently graded Arena card of theirs
-  SELECT LOWER(SPORT) AS sport, PLAYER_NAME AS name,
-         MAX_BY(FRONT_PICTURE_URL, GRADED_AT) AS image                           -- ④
+    id, number, sport, set_name, player_name, front_slab_picture_url, estimated_value_cents,
+    CASE
+      WHEN sport ILIKE '%baseball%'                                 THEN 'baseball'
+      WHEN sport ILIKE '%basketball%'                               THEN 'basketball'
+      WHEN sport ILIKE '%football%' AND sport NOT ILIKE '%soccer%'  THEN 'football'
+      WHEN sport ILIKE '%pok%'                                      THEN 'pokemon'
+      WHEN sport ILIKE '%one%piece%'                                THEN 'onepiece'
+    END                                                             AS category
   FROM APP_PROD.ADMIN.CARDS
-  WHERE NOT COALESCE(_SNOWFLAKE_DELETED, FALSE) AND FRONT_PICTURE_URL IS NOT NULL
-  GROUP BY 1, 2
+  WHERE NOT COALESCE(_SNOWFLAKE_DELETED, FALSE)
+    AND estimated_value_cents > 0
+    -- third-party slabs only: PSA, Beckett (BGS / BVG / BCCG), SGC, CSG. No Arena Club grades, no raw cards.
+    AND UPPER(TRIM(grading_company)) ILIKE ANY ('PSA%', 'BGS%', 'BVG%', 'BCCG%', '%BECKETT%', 'SGC%', 'CSG%')
+    AND NULLIF(TRIM(player_name), '') IS NOT NULL
+),
+auction_sales AS (
+  SELECT a.item_id AS card_id,
+         a.current_bid_value_cents                               AS price_cents,
+         CONVERT_TIMEZONE('America/Los_Angeles', a.end_at)::date AS d,
+         a.end_at::timestamp_ntz                                 AS evt_at
+  FROM   APP_PROD.PUBLIC.AUCTION a
+  WHERE  a.item_category = 'card'
+    AND  NOT COALESCE(a._SNOWFLAKE_DELETED, FALSE)
+    AND  a.status::text = 'completed'
+    AND  a.current_bid_value_cents > 0
+    AND  a.end_at >= DATEADD(day, -91, CURRENT_TIMESTAMP)
+    AND  a.end_at <= CURRENT_TIMESTAMP
+),
+comp_sales AS (   -- one row per distinct (card, comp) — a repeated recomp is not a new sale
+  SELECT card_id,
+         last_comp_value_cents                                AS price_cents,
+         COALESCE(finished_at, created_at)::timestamp::date   AS d,
+         COALESCE(finished_at, created_at)::timestamp_ntz     AS evt_at
+  FROM   APP_PROD.ADMIN.ESTIMATED_VALUE
+  WHERE  NOT COALESCE(_SNOWFLAKE_DELETED, FALSE)
+    AND  grading_task_status IN ('approved', 'done_skip_verify')
+    AND  last_comp_value_cents > 0
+    AND  COALESCE(finished_at, created_at) >= DATEADD(day, -91, CURRENT_TIMESTAMP)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY card_id, last_comp_value_cents
+                             ORDER BY COALESCE(finished_at, created_at)) = 1
+),
+sales AS (
+  SELECT c.category,
+         TRIM(c.player_name)                                    AS name,
+         x.price_cents / c.estimated_value_cents                AS ratio,
+         x.d,
+         x.evt_at                                               AS end_at,
+         c.front_slab_picture_url                               AS pic,
+         'https://arenaclub.com/cards/'
+           || TRIM(LOWER(REGEXP_REPLACE(c.sport || '-' || c.set_name || '-' || c.player_name,
+                                        '[^A-Za-z0-9]+', '-')), '-')
+           || '-8AC' || LPAD(c.number::varchar, 9, '0')         AS url
+  FROM (SELECT * FROM auction_sales UNION ALL SELECT * FROM comp_sales) x
+  JOIN cards c ON c.id = x.card_id
+),
+s AS (   -- drop obvious data errors: a hammer 20× over or under EV is a typo, not a market move
+  SELECT * FROM sales
+  WHERE  category IS NOT NULL
+    AND  ratio BETWEEN 0.05 AND 20
+),
+win AS (
+  SELECT category, name,
+    MEDIAN(IFF(d >  DATEADD(day, -30, CURRENT_DATE()), ratio, NULL))                                           AS now_r,
+    MEDIAN(IFF(d <= DATEADD(day, -30, CURRENT_DATE()) AND d > DATEADD(day, -60, CURRENT_DATE()), ratio, NULL)) AS prev_r,
+    COUNT_IF(d >  DATEADD(day, -30, CURRENT_DATE()))                                                           AS volume30,
+    COUNT_IF(d <= DATEADD(day, -30, CURRENT_DATE()) AND d > DATEADD(day, -60, CURRENT_DATE()))                 AS prev_n,
+    MAX_BY(pic, end_at)                                                                                        AS image,
+    MAX_BY(url, end_at)                                                                                        AS url
+  FROM s
+  GROUP BY category, name
+),
+weekly AS (
+  SELECT category, name, DATE_TRUNC('week', d) AS wk, MEDIAN(ratio) AS r
+  FROM s GROUP BY category, name, DATE_TRUNC('week', d)
 ),
 spark AS (
-  SELECT sport, name, ARRAY_AGG(ROUND(dix, 4)) WITHIN GROUP (ORDER BY d) AS spark
-  FROM daily GROUP BY sport, name
+  SELECT category, name, ARRAY_AGG(ROUND(r, 4)) WITHIN GROUP (ORDER BY wk) AS spark
+  FROM weekly GROUP BY category, name
 )
 SELECT
-  IFF(w.sport = 'one_piece', 'onepiece', w.sport)     AS "category",
+  w.category                                          AS "category",
   w.name                                              AS "name",
-  ROUND((w.now_ix / NULLIF(w.prev_ix, 0) - 1) * 100, 2) AS "change30",
+  ROUND((w.now_r / NULLIF(w.prev_r, 0) - 1) * 100, 2) AS "change30",
   w.volume30                                          AS "volume30",
-  p.image                                             AS "image",
+  w.image                                             AS "image",
+  w.url                                               AS "url",
   sp.spark                                            AS "spark"
-FROM win w
-JOIN spark sp ON sp.sport = w.sport AND sp.name = w.name
-LEFT JOIN pic p ON p.sport = w.sport AND p.name = w.name
-WHERE w.volume30 >= 10 AND w.prev_ix IS NOT NULL;
+FROM   win w
+JOIN   spark sp ON sp.category = w.category AND sp.name = w.name
+WHERE  w.volume30 >= 3          -- enough sales in each window to mean something;
+  AND  w.prev_n   >= 3          -- the app's MOVERS_MIN_VOLUME can raise the bar further
+  AND  w.prev_r   > 0
+ORDER  BY ABS("change30") DESC;

@@ -34,10 +34,11 @@ In Vercel, go to **Project → Settings → Environment Variables**. Add the two
 |---|---|
 | `DATABASE_URL` | **Required.** The Postgres connection string |
 | `SESSION_SECRET` | **Required.** 40+ random characters. Signs the login cookie, and is the one-time setup code |
-| `MOVERS_SOURCE_URL` | Optional. JSON feed for Risers & Fallers (see below) |
+| `CRON_SECRET` | Recommended. Any random string. Lets Vercel's scheduler rebuild Risers & Fallers |
+| `MOVERS_SOURCE_URL` | Optional. Defaults to Metabase question 43429. Set it only to use a different feed |
 | `MOVERS_SOURCE_TOKEN` | Optional. Sent as `Authorization: Bearer …` to that feed |
-| `MOVERS_METABASE_API_KEY` | Optional. Metabase API key, when the feed is a Metabase question |
-| `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to qualify, default 10 |
+| `MOVERS_METABASE_API_KEY` | **Needed for Risers & Fallers.** Metabase API key that can run question 43429 |
+| `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to qualify, default 3 |
 | `TCGPLAYER_PUBLIC_KEY` / `TCGPLAYER_PRIVATE_KEY` | Optional. TCGplayer developer keys, for Pokémon and One Piece card images |
 | `POKEMONTCG_API_KEY` | Optional. Raises the Pokémon TCG API rate limit |
 
@@ -178,18 +179,69 @@ array of rows like this:
 `category` is one of `baseball`, `basketball`, `football`, `pokemon` or `onepiece`. The ranking is
 done in `api/movers.js`, so the feed only has to supply raw numbers.
 
+### Speed
+
+Risers & Fallers never queries Metabase or the public APIs while someone is waiting.
+- **Building:** a scheduled job (`/api/movers-refresh`, set in `vercel.json` under `crons`) builds
+  the rankings and saves them to Postgres.
+- **Page loads:** they read that saved result, which takes milliseconds whether the source covers
+  100 cards or 100,000.
+- **Rebuild now:** admins can press **Refresh** on the page to rebuild immediately.
+- **Failed builds:** if a source is down, the last good rankings stay up.
+- **Setup:** add `CRON_SECRET` (any random string) in Vercel. The schedule runs daily at 12:00 UTC,
+  which is once a day on the Hobby plan. On Pro, change it to `0 */6 * * *` for every 6 hours.
+- **Keep the query aggregated:** the Metabase question should return one row per player or
+  character, not one per card. Snowflake does the heavy lifting, and Vercel only receives a few
+  thousand rows.
+
+### Free public data (works with no setup)
+
+**Pokémon fills in on its own.** The Pokémon TCG API publishes Cardmarket's average sold prices
+for every card over the last 1, 7 and 30 days. `lib/public-pokemon.js` pulls the chase-rarity
+cards (illustration rares, ex, V, VMAX and so on), groups them by character, and ranks each
+character by how its recent sales compare with its 30-day average.
+- **Daily snapshots:** one is saved each day. After 30 days the figure becomes a true 30-day change
+  and the trend line fills out to 90 days.
+- **Pictures:** real card art.
+- **The count column:** for Pokémon it shows how many of that character's cards sold in the last
+  30 days, since Cardmarket publishes averages rather than individual sales.
+- **Refresh:** the data updates twice a day. The first load after a refresh takes up to a minute
+  while it collects about 8,000 cards.
+- **Fine-tuning:** `POKEMON_MIN_PRICE` (default 3, in EUR) skips bulk cards. A free
+  `POKEMONTCG_API_KEY` from pokemontcg.io raises the rate limit. `MOVERS_PUBLIC=off` turns it off.
+
+**Sports and One Piece have no free public sales feed.** eBay's sold-listings data is closed to
+new developers, and the card price guides that track it, such as SportsCardsPro and PriceCharting,
+are paid. For those three categories, use Arena Club's comps below, which are themselves
+external sold prices, or a paid price-guide key.
+
+If `MOVERS_SOURCE_URL` also returns Pokémon rows, the feed wins and the public data is skipped.
+
 ### Wiring in Arena Club's own data (recommended)
 
-`sql/movers.sql` builds the feed from `APP_PROD.ADMIN.COMPS` (130M sold prices) and `CARD_TYPES`.
+`sql/movers.sql` builds the feed from two kinds of real market price in Snowflake. It covers all
+five categories, with no column guessing. Only PSA, Beckett (BGS, BVG, BCCG), SGC and CSG slabs count.
+Arena Club grades and raw cards are excluded.
+- **Completed auctions:** `public.auction`, the same tables as the "ALL AUCTIONS" question. Live
+  bids, reserve-not-met, cancelled and expired-payment auctions are ignored.
+- **Last comps:** the comp recorded on every approved EV or recomp in `admin.estimated_value`, the
+  same source as LAST_COMP in the inventory question. This covers far more cards than auctions do.
+  A recomp that repeats the same comp is counted once.
+- **How price moves are measured:** each sale is compared with that card's estimated value, so a
+  player's number reflects the market, not which cards happened to sell that month.
 
-1. Run the `STEP 0` check at the top of the file and fix the three marked column names if they differ.
-2. Save the query as a Metabase question on the Snowflake database (397). Note its id.
-3. Create a Metabase API key: Admin → Settings → Authentication → API keys. Give it a group that can
-   run that question.
-4. In Vercel, set:
-   - `MOVERS_SOURCE_URL` = `https://arena-club.metabaseapp.com/api/card/<id>/query/json`
+1. In Metabase, choose **New → SQL query** on the Snowflake database (397), paste `sql/movers.sql`,
+   run it and save it. Note the question number in the URL.
+2. Create a Metabase API key: **Admin → Settings → Authentication → API keys**. Put it in a group
+   that can run that question.
+3. In Vercel, set:
+   - `MOVERS_SOURCE_URL` = `https://arena-club.metabaseapp.com/api/card/<number>/query/json`
    - `MOVERS_METABASE_API_KEY` = the key
-5. Redeploy. The tab and its 90-day trend lines fill with real data, refreshed every 10 minutes.
+   - `CRON_SECRET` = any random string, if it isn't set already
+4. Redeploy, open Risers & Fallers and press **Refresh** (as an admin) to build the first snapshot.
+
+If the lists are thin, the query already requires 3 sales in each 30-day window. Leave
+`MOVERS_MIN_VOLUME` at 3. If a category is crowded with noise, raise it to 5 or 10.
 
 Nothing goes through a public link. The key stays on the server and never reaches the browser.
 

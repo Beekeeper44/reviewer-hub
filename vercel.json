@@ -32,5 +32,19 @@
         }
       ]
     }
+  ],
+  "functions": {
+    "api/movers.js": {
+      "maxDuration": 60
+    },
+    "api/movers-refresh.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/movers-refresh",
+      "schedule": "0 12 * * *"
+    }
   ]
 }

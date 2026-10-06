@@ -895,7 +895,7 @@ html[data-view="mobile"] .mvgrid{grid-template-columns:1fr;gap:18px}
 .mvchg.up{color:var(--up)}.mvchg.down{color:var(--down)}
 .mvvol{color:var(--muted);font-size:12px;white-space:nowrap}
 .mvsp{width:92px;height:28px;display:block;margin-left:auto}
-.mvempty{padding:26px 0;color:var(--muted);font-size:13px;text-align:center}
+.mvempty{padding:26px 8px;color:var(--muted);font-size:13px;text-align:center;line-height:1.5}
 html[data-view="mobile"] .mvtbl .hv{display:none}
 /* ticker movers */
 .tkmv{display:inline-flex;align-items:center;gap:6px;padding:0 9px;font-size:12px;color:var(--ink)}
@@ -1318,6 +1318,7 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
   <div class="sheet-top">
     <button class="btn" id="mvClose">&larr; Back</button>
     <h2>Risers &amp; Fallers</h2>
+    <a class="btn" href="https://alt.xyz/market-trends" target="_blank" rel="noopener" style="text-decoration:none">Alt market trends &#8599;</a>
     <button class="btn" id="mvRefresh">Refresh</button>
   </div>
   <div class="sheet-in mvwrap">
@@ -1886,7 +1887,7 @@ let mvData=null,mvCat="all",mvAt=0,mvSide="up";
 async function loadMovers(force){
   if(!force&&mvData&&Date.now()-mvAt<10*60*1000)return mvData;
   try{
-    const r=await fetch("/api/movers",{headers:{accept:"application/json"}});
+    const r=await fetch("/api/movers"+(force==="rebuild"?"?rebuild=1":""),{headers:{accept:"application/json"}});
     mvData=await r.json();
   }catch(e){mvData={ok:false,why:"The server did not respond."}}
   mvAt=Date.now();
@@ -1919,7 +1920,7 @@ function mvArt(name,cat){
 }
 function mvTable(rows,up,n,cat){
   rows=(rows||[]).slice(0,n);
-  if(!rows.length)return `<div class="mvempty">Nothing qualifies yet.</div>`;
+  if(!rows.length)return `<div class="mvempty">${esc((mvMeta[cat]||{}).note||"Nothing qualifies yet.")}</div>`;
   return `<table class="mvtbl"><thead><tr>
       <th>${up?"Rising":"Falling"}</th><th class="r">30 day change</th>
       <th class="r hv">30d sales</th><th class="r hv">90 day trend</th></tr></thead><tbody>${
@@ -1930,9 +1931,11 @@ function mvTable(rows,up,n,cat){
       <td class="r hv"><span class="mvvol">${x.volume30.toLocaleString()}</span></td>
       <td class="r hv">${mvSpark(x.spark,up)}</td></tr>`).join("")}</tbody></table>`;
 }
+let mvMeta={};
 function mvList(rows,up,n,cat,start){
   start=start||0;rows=(rows||[]).slice(0,n);
-  if(!rows.length)return `<div class="mvempty">Nothing qualifies yet.</div>`;
+  const meta=mvMeta[cat]||{};
+  if(!rows.length)return `<div class="mvempty">${esc(meta.note||"Nothing qualifies yet.")}</div>`;
   return `<ol class="mvlist">${rows.map((x,i)=>`<li title="${esc(x.name)} · ${x.volume30.toLocaleString()} sales in 30 days"
       ${x.url?`data-url="${esc(x.url)}"`:""}>
     <span class="rk">${start+i+1}</span>
@@ -1940,13 +1943,14 @@ function mvList(rows,up,n,cat,start){
       onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
     <span class="bd"><b>${esc(x.name)}</b>
       <span class="mt"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
-        <span class="vol">${x.volume30.toLocaleString()} sales</span></span></span>
+        <span class="vol">${x.volume30.toLocaleString()} ${esc((meta.volLabel||"sales").replace(/s$/,x.volume30===1?"":"s"))}</span></span></span>
     <span class="sp">${mvSpark(x.spark,up)}</span></li>`).join("")}</ol>`;
 }
 function renderMovers(){
   const d=mvData,tabs=document.getElementById("mvTabs"),body=document.getElementById("mvBody"),
     note=document.getElementById("mvNote");
   const cats=(d&&d.ok&&d.categories)||[];
+  mvMeta=Object.fromEntries(cats.map(c=>[c.id,{note:c.note,volLabel:c.volLabel}]));
   tabs.innerHTML=[{id:"all",label:"All"},...cats].map(c=>
     `<button data-mv="${c.id}" aria-pressed="${mvCat===c.id}">${esc(c.label)}</button>`).join("");
   if(!d||!d.ok){
@@ -1954,12 +1958,14 @@ function renderMovers(){
     body.innerHTML=`<div class="empty"><b>No market data connected</b>${
       d&&d.why==="no-source"
         ?"Save sql/movers.sql as a Metabase question, then set MOVERS_SOURCE_URL and MOVERS_METABASE_API_KEY in Vercel. The README walks through it."
-        :esc((d&&d.why)||"Could not load market data.")}</div>`;
+        :esc((d&&d.why)||"Could not load market data.")}
+      <p style="margin-top:14px"><a class="btn go" href="https://alt.xyz/market-trends" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open Alt market trends &#8599;</a></p></div>`;
     return;
   }
   note.innerHTML=(d.sample?`<span class="mvsample">SAMPLE</span>Placeholder names and numbers so you can check the layout. `:"")+
-    `Ranked by 30-day price change, weighted by sales volume. Only names with at least <b>${d.minVolume}</b> sales in 30 days qualify.`+
-    (d.asOf?` Updated ${esc(new Date(d.asOf).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}.`:"");
+    `Ranked by 30-day price change, weighted by sales volume.`+
+    cats.filter(c=>c.note&&(c.risers.length||c.fallers.length)).map(c=>` <b>${esc(c.label)}:</b> ${esc(c.note)}`).join("")+
+    ((d.builtAt||d.asOf)?` Updated ${esc(new Date(d.builtAt||d.asOf).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}.`:"");
   const n=mvCat==="all"?5:10;
   const shown=mvCat==="all"?cats:cats.filter(c=>c.id===mvCat);
   const block=(c,up)=>`<div class="mvcat"><h3>${esc(c.label)}<small>${c.kind==="characters"?"Characters":"Players"}</small>${
@@ -1982,7 +1988,13 @@ async function openMovers(){
   await loadMovers();renderMovers();
 }
 document.getElementById("mvClose").onclick=()=>closeSheet("movers");
-document.getElementById("mvRefresh").onclick=async()=>{await loadMovers(true);renderMovers();toast("Market data refreshed.")};
+document.getElementById("mvRefresh").onclick=async()=>{
+  const admin=isAdmin();
+  if(admin)toast("Rebuilding from the data sources. This can take up to a minute…");
+  await loadMovers(admin?"rebuild":true);renderMovers();
+  toast(mvData&&mvData.rebuildError?"Rebuild failed, still showing the last good data: "+mvData.rebuildError
+    :admin?"Rebuilt from the latest data.":"Up to date.");
+};
 document.getElementById("movers").addEventListener("click",e=>{
   const c=e.target.closest("[data-mv]")?.dataset.mv;
   if(c){mvCat=c;renderMovers();document.getElementById("movers").scrollTo({top:0});return}

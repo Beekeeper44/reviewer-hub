@@ -1,5 +1,7 @@
 import { requireUser } from '../lib/auth.js';
+import { kvGet, kvSet, roster } from '../lib/db.js';
 import { addImages } from '../lib/images.js';
+import { pokemonRows } from '../lib/public-pokemon.js';
 
 // Risers & Fallers feed.
 //
@@ -31,11 +33,15 @@ const ALIASES = { 'one piece': 'onepiece', 'one-piece': 'onepiece', 'pokémon': 
 
 // A 60% move on three sales is noise. Ignore anything below this many sales in 30 days,
 // then rank by % change with a light volume weight so heavily traded names win ties.
-const MIN_VOLUME = Number(process.env.MOVERS_MIN_VOLUME || 10);
+const MIN_VOLUME = Number(process.env.MOVERS_MIN_VOLUME || 3);
 const TOP = 10;
 
-let memo = null; // { at, body }
-const TTL = 10 * 60 * 1000;
+// Speed: the heavy work (Metabase over 100k+ cards, public data, picture lookups) never runs while
+// someone waits. It runs on a schedule (vercel.json "crons") and the result is saved to Postgres.
+// Page loads just read that saved snapshot, which takes tens of milliseconds.
+const SNAP = 'sys:movers:snapshot';
+let memo = null;                                   // per-instance copy of the snapshot
+const MEMO_TTL = 60 * 1000;
 
 function catOf(v) {
   const k = String(v || '').trim().toLowerCase();
@@ -63,9 +69,11 @@ function clean(r) {
   };
 }
 
-async function build() {
-  const src = process.env.MOVERS_SOURCE_URL;
-  if (!src) return { ok: false, why: 'no-source' };
+async function fromFeed() {
+  // Default: the Risers & Fallers question in Arena Club's Metabase (sql/movers.sql).
+  // MOVERS_SOURCE_URL in Vercel overrides it. The API key is never in code.
+  const src = process.env.MOVERS_SOURCE_URL || 'https://arena-club.metabaseapp.com/api/card/43429/query/json';
+  if (/metabaseapp\.com/.test(src) && !process.env.MOVERS_METABASE_API_KEY) return null;
   const headers = { accept: 'application/json' };
   if (process.env.MOVERS_SOURCE_TOKEN) headers.authorization = 'Bearer ' + process.env.MOVERS_SOURCE_TOKEN;
   // Metabase saved question: POST <metabase>/api/card/<id>/query/json with an API key (stays private,
@@ -75,24 +83,72 @@ async function build() {
   const r = await fetch(src, isMetabase ? { method: 'POST', headers } : { headers });
   if (!r.ok) throw new Error('source returned ' + r.status);
   const d = await r.json();
-  const rows = (Array.isArray(d) ? d : (d.rows || d.data || [])).map(lowerKeys);
+  return (Array.isArray(d) ? d : (d.rows || d.data || [])).map(lowerKeys);
+}
+
+// Where each category's numbers come from, shown under the lists.
+const PUBLIC_NOTE = {
+  pokemon: 'Public data: Cardmarket average sold prices via the Pokémon TCG API. Sales column = cards with sales in the last 30 days.',
+};
+const NO_PUBLIC = 'There is no free public sales feed for this category. Connect Arena Club comps (sql/movers.sql) or a SportsCardsPro / PriceCharting API key.';
+
+async function build() {
+  let rows = [], notes = {}, errors = [];
+  try { const f = await fromFeed(); if (f) rows = f; } catch (e) { errors.push(String(e.message || e)); }
+  const fed = new Set(rows.map(x => catOf(x.category)));
+
+  // Free public data fills any category the feed doesn't cover.
+  if (!fed.has('pokemon') && process.env.MOVERS_PUBLIC !== 'off') {
+    try { rows = rows.concat(await pokemonRows()); notes.pokemon = PUBLIC_NOTE.pokemon; }
+    catch (e) { errors.push('Pokémon public data: ' + (e.message || e)); }
+  }
 
   const categories = CATS.map(c => {
     const pool = rows.filter(x => catOf(x.category) === c.id).map(clean)
-      .filter(x => x.name && Number.isFinite(x.change30) && x.volume30 >= MIN_VOLUME);
+      .filter(x => x.name && Number.isFinite(x.change30) &&
+        x.volume30 >= (notes[c.id] ? 1 : MIN_VOLUME));
     const up = pool.filter(x => x.change30 > 0).sort((a, b) => score(b) - score(a)).slice(0, TOP);
     const down = pool.filter(x => x.change30 < 0).sort((a, b) => score(a) - score(b)).slice(0, TOP);
-    return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down };
+    return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down,
+      volLabel: notes[c.id] ? 'cards' : 'sales',
+      note: notes[c.id] || (pool.length ? '' : NO_PUBLIC) };
   });
+  if (!categories.some(c => c.risers.length || c.fallers.length))
+    return { ok: false, why: errors.length ? errors.join(' · ') : 'no-source' };
   await Promise.all(categories.map(c => addImages([...c.risers, ...c.fallers], c.id)));
-  return { ok: true, asOf: d.asOf || new Date().toISOString(), minVolume: MIN_VOLUME, categories };
+  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories };
 }
 
-export default requireUser(async function (req, res) {
+export async function rebuild() {
+  const body = await build();
+  body.builtAt = new Date().toISOString();
+  if (body.ok) await kvSet(SNAP, JSON.stringify(body));   // a failed build never replaces good data
+  memo = null;
+  return body;
+}
+async function snapshot() {
+  if (memo && Date.now() - memo.at < MEMO_TTL) return memo.body;
+  const raw = await kvGet(SNAP);
+  const body = raw ? JSON.parse(raw) : null;
+  if (body) memo = { at: Date.now(), body };
+  return body;
+}
+
+export default requireUser(async function (req, res, who) {
   try {
-    if (!memo || Date.now() - memo.at > TTL) memo = { at: Date.now(), body: await build() };
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600');
-    res.status(200).json(memo.body);
+    let body = null;
+    const wantRebuild = req.query && req.query.rebuild === '1';
+    if (wantRebuild) {
+      const me = (await roster()).find(u => u.id === who.email);
+      if (!me || me.role !== 'admin') { res.status(403).json({ ok: false, why: 'Only an admin can rebuild.' }); return; }
+      body = await rebuild();
+      if (!body.ok) body = Object.assign((await snapshot()) || {}, { rebuildError: body.why }) ;
+    } else {
+      body = await snapshot();
+      if (!body) body = await rebuild();           // very first time only
+    }
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.status(200).json(body);
   } catch (e) {
     res.status(200).json({ ok: false, why: String(e && e.message || e) });
   }

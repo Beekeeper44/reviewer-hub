@@ -1083,6 +1083,19 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
 .mvlook-side .mvarrow{width:28px;height:28px;font-size:13px;border:2.5px solid currentColor;background:none!important;color:inherit!important;border-radius:50%;display:inline-grid;place-items:center}
 .mvlook-side .mvlist li{grid-template-columns:34px 46px minmax(0,1fr)}
 .mvchg.flat{color:var(--ink)}
+.mvwarn{flex-basis:100%;margin:0;padding:10px 14px;border-radius:10px;border:2px solid #FFB020;
+  background:color-mix(in srgb,#FFB020 14%,var(--well));font-weight:700;font-size:13.5px}
+.mvlook-best{border:2px solid var(--green);border-radius:12px;padding:10px 12px 4px;margin:0 0 14px;background:var(--well)}
+.mvlook-best h4{margin:0 0 4px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--green)}
+.mvlook-best .mvlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0 18px}
+.mvlook-best .mvlist li,.mvlook-side.flat .mvlist li{grid-template-columns:34px 46px minmax(0,1fr)}
+.mvlook-side.flat h4{color:var(--ink)}
+.mvocr{margin-top:12px;font-size:12.5px}.mvocr summary{cursor:pointer;font-weight:700}
+.mvocr pre{white-space:pre-wrap;max-height:240px;overflow:auto;background:var(--sunk);padding:10px;border-radius:8px;font-size:12px}
+.mvwatch{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 14px;padding:10px 14px;
+  border:2px solid var(--green);border-radius:12px;background:var(--well);font-size:14px}
+.mvwatch b{margin-right:2px}
+.mvlook-use{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:14px}
 </style>
 </head>
 <body>
@@ -1384,6 +1397,7 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
   </div>
   <div class="sheet-in mvwrap">
     <div class="mvbar"><div class="mvtabs" id="mvTabs"></div>
+    <p class="mvwarn" id="mvWarn" hidden></p>
     <div class="mvside" id="mvSide" role="tablist" aria-label="Risers or fallers">
       <button class="up" data-side="up" role="tab"><span class="ar">&#9650;</span> Risers</button>
       <button class="down" data-side="down" role="tab"><span class="ar">&#9660;</span> Fallers</button>
@@ -1412,6 +1426,7 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
       </div>
       <div id="mvLookOut"></div>
     </section>
+    <div class="mvwatch" id="mvWatch" hidden></div>
     <div id="mvBody"></div>
     <p class="mvnote" id="mvNote"></p>
   </div>
@@ -1969,11 +1984,67 @@ function renderTicker(){
 
 /* ================= risers & fallers ================= */
 let mvData=null,mvCat="all",mvAt=0,mvSide="up";
+/* "Our list": names the team drops in become the Risers & Fallers. Shared by everyone. */
+const WATCH_KEY="align:moverslist";
+let mvMarket=null,mvWatch={names:[],on:true},mvLastHits=[];
+async function loadWatch(){
+  delete cache[WATCH_KEY];
+  const w=await sGet(WATCH_KEY);
+  mvWatch=Object.assign({names:[],on:true},w||{});
+}
+async function saveWatch(){await sSet(WATCH_KEY,mvWatch)}
+function watchKey(x){return x.category+"|"+String(x.name).toLowerCase()}
+async function buildFromWatch(market){
+  if(!mvWatch.on||!mvWatch.names.length||!market||!market.ok)return market;
+  let d;
+  try{
+    const r=await fetch("/api/movers-lookup",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({text:mvWatch.names.map(x=>x.name).join("\n"),exact:true,category:"all"})});
+    d=await r.json();
+  }catch(e){return market}
+  if(!d.ok)return market;
+  const keep=new Set(mvWatch.names.map(watchKey));
+  const hits=d.hits.filter(h=>keep.has(watchKey(h)));
+  const cats=market.categories.map(c=>{
+    const mine=hits.filter(h=>h.category===c.id);
+    return {...c,
+      risers:mine.filter(h=>h.change30>0).sort((a,b)=>b.change30-a.change30).slice(0,10),
+      fallers:mine.filter(h=>h.change30<0).sort((a,b)=>a.change30-b.change30).slice(0,10),
+      note:mine.length?"":"None of our list's names are in this category."};
+  });
+  return {...market,categories:cats,watch:{total:mvWatch.names.length,found:hits.length}};
+}
+function renderWatchBar(){
+  const el=document.getElementById("mvWatch");if(!el)return;
+  const n=mvWatch.names.length;
+  if(!n){el.hidden=true;return}
+  el.hidden=false;
+  el.innerHTML=mvWatch.on
+    ?`<b>Showing our list:</b> ${n} name${n===1?"":"s"}${mvData&&mvData.watch&&mvData.watch.found<n?` (${mvData.watch.found} with current data)`:""}.
+       <button class="btn sm" data-watch="market">Show whole market</button>
+       <button class="btn sm" data-watch="edit">See / edit list</button>
+       <button class="btn sm" data-watch="clear">Clear list</button>`
+    :`<b>Showing the whole market.</b> Our list has ${n} name${n===1?"":"s"}.
+       <button class="btn sm go" data-watch="list">Show our list</button>
+       <button class="btn sm" data-watch="edit">See / edit list</button>`;
+}
+async function addToWatch(hits,replace){
+  if(replace)mvWatch.names=[];
+  const have=new Set(mvWatch.names.map(watchKey));
+  let added=0;
+  for(const h of hits){const k=watchKey(h);if(!have.has(k)){mvWatch.names.push({category:h.category,name:h.name});have.add(k);added++}}
+  mvWatch.on=true;await saveWatch();
+  mvData=await buildFromWatch(mvMarket);renderMovers();
+  toast(replace?`Risers & Fallers now built from ${mvWatch.names.length} names.`:`Added ${added} name${added===1?"":"s"} to our Risers & Fallers.`);
+  document.getElementById("mvBody").scrollIntoView({behavior:"smooth",block:"start"});
+}
 async function loadMovers(force){
   if(!force&&mvData&&Date.now()-mvAt<10*60*1000)return mvData;
   try{
     const r=await fetch("/api/movers"+(force==="rebuild"?"?rebuild=1":""),{headers:{accept:"application/json"}});
-    mvData=await r.json();
+    mvMarket=await r.json();
+    await loadWatch();
+    mvData=await buildFromWatch(mvMarket);
   }catch(e){mvData={ok:false,why:"The server did not respond."}}
   mvAt=Date.now();
   return mvData;
@@ -2034,6 +2105,7 @@ function mvList(rows,up,n,cat,start){
 }
 function renderMovers(){
   mvRows=[];
+  renderWatchBar();
   const d=mvData,tabs=document.getElementById("mvTabs"),body=document.getElementById("mvBody"),
     note=document.getElementById("mvNote");
   const cats=(d&&d.ok&&d.categories)||[];
@@ -2049,8 +2121,10 @@ function renderMovers(){
       <p style="margin-top:14px"><a class="btn go" href="https://alt.xyz/market-trends" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open Alt market trends &#8599;</a></p></div>`;
     return;
   }
+  const warn=document.getElementById("mvWarn");
+  if(warn){warn.hidden=!d.sqlWarning;warn.textContent=d.sqlWarning||""}
   note.innerHTML=(d.sample?`<span class="mvsample">SAMPLE</span>Placeholder names and numbers so you can check the layout. `:"")+
-    `Ranked by 30-day price change, weighted by sales volume.`+
+    (d.watch?`Built from our list of ${d.watch.total} names, ranked by 30-day change. `:`Ranked by 30-day price change among established names: `)+(d.watch?"":`${[...new Set(cats.filter(c=>c.listBar&&!c.note).map(c=>c.listBar))].sort((a,b)=>b-a).map(n=>n+"+").join(" / ")||"25+"} sales in the last 30 days (Look up names covers everyone).`)+
     cats.filter(c=>c.note&&(c.risers.length||c.fallers.length)).map(c=>` <b>${esc(c.label)}:</b> ${esc(c.note)}`).join("")+
     ((d.builtAt||d.asOf)?` Updated ${esc(new Date(d.builtAt||d.asOf).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}.`:"");
   const n=mvCat==="all"?5:10;
@@ -2113,6 +2187,26 @@ document.getElementById("movers").addEventListener("click",e=>{
   if(c){mvCat=c;renderMovers();document.getElementById("movers").scrollTo({top:0});return}
   const sd=e.target.closest("[data-side]")?.dataset.side;
   if(sd){mvSide=sd;renderMovers();return}
+  const wb=e.target.closest("[data-watch]")?.dataset.watch;
+  if(wb){
+    (async()=>{
+      if(wb==="add")return addToWatch(mvLastHits,false);
+      if(wb==="replace")return addToWatch(mvLastHits,true);
+      if(wb==="market"){mvWatch.on=false;await saveWatch();mvData=mvMarket;renderMovers();return}
+      if(wb==="list"){mvWatch.on=true;await saveWatch();mvData=await buildFromWatch(mvMarket);renderMovers();return}
+      if(wb==="clear"){
+        if(!confirm("Clear our list? Risers & Fallers goes back to the whole market for everyone."))return;
+        mvWatch={names:[],on:true};await saveWatch();mvData=mvMarket;renderMovers();toast("List cleared.");return}
+      if(wb==="edit"){
+        const p=document.getElementById("mvLook");p.hidden=false;
+        document.getElementById("mvLookText").value=mvWatch.names.map(x=>x.name).join("\n");
+        document.getElementById("mvLookCat").value="all";
+        document.getElementById("mvLookOut").innerHTML=`<p class="mvlook-sum">This is our list. Edit the names, press <b>Find in our data</b>, then <b>Replace our list with these</b> to save it.</p>`;
+        p.scrollIntoView({behavior:"smooth",block:"start"});
+      }
+    })();
+    return;
+  }
   const row=e.target.closest("[data-mvrow]");
   if(row)mvOpen(+row.dataset.mvrow);
 });
@@ -2130,24 +2224,72 @@ function loadTesseract(){
   });
   return tessLoading;
 }
+// Everything from one CDN, pinned, so nothing depends on a third host being reachable.
+const TESS={
+  workerPath:"https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
+  corePath:"https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1",
+  langPath:"https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int"
+};
+let tessWorker=null;
+async function getWorker(onStatus){
+  if(tessWorker)return tessWorker;
+  const T=await loadTesseract();
+  tessWorker=await T.createWorker("eng",1,{...TESS,logger:m=>onStatus&&onStatus(m)});
+  return tessWorker;
+}
+// Screenshots of lists have small text: scale up, greyscale and boost contrast before reading.
+function prepImage(file){
+  return new Promise((ok,bad)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const scale=Math.min(3,Math.max(1,2200/img.naturalWidth));
+      const c=document.createElement("canvas");
+      c.width=Math.round(img.naturalWidth*scale);c.height=Math.round(img.naturalHeight*scale);
+      const g=c.getContext("2d",{willReadFrequently:true});
+      g.imageSmoothingQuality="high";g.drawImage(img,0,0,c.width,c.height);
+      const px=g.getImageData(0,0,c.width,c.height),d=px.data;
+      let sum=0;for(let i=0;i<d.length;i+=4)sum+=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+      const dark=sum/(d.length/4)<128;                   // dark-mode screenshot: invert to dark-on-light
+      for(let i=0;i<d.length;i+=4){
+        let y=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+        if(dark)y=255-y;
+        y=Math.max(0,Math.min(255,(y-128)*1.35+128));
+        d[i]=d[i+1]=d[i+2]=y;
+      }
+      g.putImageData(px,0,0);URL.revokeObjectURL(img.src);ok(c);
+    };
+    img.onerror=()=>bad(new Error("Could not open that image."));
+    img.src=URL.createObjectURL(file);
+  });
+}
 async function mvReadImage(file){
   if(!file||!/^image\//.test(file.type)){toast("That isn't an image.");return}
   const msg=document.getElementById("mvDropMsg");
   const url=URL.createObjectURL(file);
-  msg.innerHTML=`<img src="${url}" alt="" class="mvdrop-img"><br><span id="mvOcrPct">Reading text…</span>`;
+  msg.innerHTML=`<img src="${url}" alt="" class="mvdrop-img"><br><span id="mvOcrPct">Loading the text reader…</span>`;
+  const status=t=>{const el=document.getElementById("mvOcrPct");if(el)el.textContent=t};
   try{
-    const T=await loadTesseract();
-    const r=await T.recognize(file,"eng",{logger:m=>{
-      const el=document.getElementById("mvOcrPct");
-      if(el&&m.status==="recognizing text")el.textContent="Reading text… "+Math.round(m.progress*100)+"%";
-      else if(el&&m.status)el.textContent=m.status.replace(/^\w/,c=>c.toUpperCase())+"…";
-    }});
+    const w=await getWorker(m=>{
+      if(m.status==="recognizing text")status("Reading text… "+Math.round(m.progress*100)+"%");
+      else if(m.status)status(m.status.replace(/^\w/,c=>c.toUpperCase())+"…");
+    });
+    const canvas=await prepImage(file);
+    status("Reading text…");
+    const r=await Promise.race([w.recognize(canvas),
+      new Promise((_,bad)=>setTimeout(()=>bad(new Error("Reading took too long. Try a smaller screenshot.")),90000))]);
     const text=(r&&r.data&&r.data.text)||"";
-    const el=document.getElementById("mvOcrPct");if(el)el.textContent="Done. Matching names…";
+    const n=text.split(/\n/).filter(x=>x.trim()).length;
+    if(!n){status("No text found in that image. Try a sharper or larger screenshot.");return}
+    status("Read "+n+" lines. Matching names…");
     await mvLookup(text,true);
-    if(el)el.textContent="Read "+text.split(/\n/).filter(Boolean).length+" lines.";
+    status("Read "+n+" lines.");
+    const out=document.getElementById("mvLookOut");
+    out.insertAdjacentHTML("beforeend",`<details class="mvocr"><summary>What was read from the screenshot</summary><pre>${esc(text)}</pre></details>`);
   }catch(e){
-    msg.textContent=(e&&e.message)||"Could not read that image.";
+    tessWorker=null;
+    const why=(e&&e.message)||String(e||"");
+    status("Couldn't read the image: "+why+(/load|fetch|network|import/i.test(why)?" (the text reader downloads from cdn.jsdelivr.net; check nothing is blocking it)":""));
+    console.error("OCR failed",e);
   }
 }
 async function mvLookup(text,fromImage){
@@ -2164,8 +2306,10 @@ async function mvLookup(text,fromImage){
   for(const [k,v] of Object.entries(d.labels||{}))mvMeta[k]=Object.assign(mvMeta[k]||{},v);
   const lab=c=>((d.labels||{})[c]||{}).label||c;
   const head=`<p class="mvlook-sum"><b>${d.hits.length}</b> match${d.hits.length===1?"":"es"} in our data${
-    fromImage?" from the screenshot":""}${d.widened?` (none in ${esc(document.getElementById("mvLookCat").selectedOptions[0].text)}, so all categories were searched)`:""}. Our numbers: completed auctions and comps, PSA / Beckett / SGC / CSG.</p>`;
+    fromImage?" from the screenshot":""}${d.widened?` (none in ${esc(document.getElementById("mvLookCat").selectedOptions[0].text)}, so all categories were searched)`:""}. Our numbers: completed auctions and comps, PSA / Beckett / SGC / CSG.${
+    d.builtAt?` Data built <b>${esc(new Date(d.builtAt).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}</b>.`:""}</p>`;
   const miss=!fromImage&&d.missed&&d.missed.length?`<p class="mvlook-miss">No data for: ${d.missed.map(esc).join(", ")}</p>`:"";
+  mvLastHits=d.hits;
   if(!d.hits.length){out.innerHTML=head+miss;return}
   const li=x=>{
     const up=x.change30>=0,vl=((mvMeta[x.category]||{}).volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
@@ -2177,13 +2321,21 @@ async function mvLookup(text,fromImage){
         <span class="mt"><span class="mvchg ${x.change30>0?"up":x.change30<0?"down":"flat"}">${x.change30>0?"&#9650;":x.change30<0?"&#9660;":"&#9644;"} ${mvPct(x.change30)}</span>
           <span class="vol">${x.volume30.toLocaleString()} ${esc(vl)}</span></span>
         <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`};
-  const ris=d.hits.filter(x=>x.change30>0).sort((a,b)=>b.change30-a.change30);
-  const fal=d.hits.filter(x=>x.change30<0).sort((a,b)=>a.change30-b.change30);
-  const flat=d.hits.filter(x=>x.change30===0);
+  // exact name typed ("kobe bryant" -> Kobe Bryant) goes on top as the best match, whatever its move
+  const best=d.hits.filter(x=>x.exact&&!fromImage);
+  const rest=d.hits.filter(x=>!(x.exact&&!fromImage));
+  const ris=rest.filter(x=>x.change30>0).sort((a,b)=>b.change30-a.change30);
+  const fal=rest.filter(x=>x.change30<0).sort((a,b)=>a.change30-b.change30);
+  const flat=rest.filter(x=>x.change30===0);
   const col=(cls,title,arr)=>`<div class="mvlook-side ${cls}"><h4><span class="mvarrow">${cls==="up"?"&#9650;":"&#9660;"}</span>${title}
       <small>${arr.length}</small></h4>${arr.length?`<ol class="mvlist">${arr.map(li).join("")}</ol>`:`<div class="mvempty">None in this list.</div>`}</div>`;
-  out.innerHTML=head+`<div class="mvlook-split">${col("up","Risers",ris)}${col("down","Fallers",fal)}</div>`+
-    (flat.length?`<p class="mvlook-miss">No change: ${flat.map(x=>esc(x.name)).join(", ")}</p>`:"")+miss;
+  out.innerHTML=head+
+    (best.length?`<div class="mvlook-best"><h4>Best match</h4><ol class="mvlist">${best.map(li).join("")}</ol></div>`:"")+
+    `<div class="mvlook-split">${col("up","Risers",ris)}${col("down","Fallers",fal)}</div>`+
+    (flat.length?`<div class="mvlook-side flat" style="margin-top:14px"><h4>No change <small>${flat.length}</small></h4>
+      <ol class="mvlist mvlook-list">${flat.map(li).join("")}</ol></div>`:"")+miss+
+    `<div class="mvlook-use"><button class="btn go" data-watch="add">Add these ${d.hits.length} to our Risers &amp; Fallers</button>
+      ${mvWatch.names.length?`<button class="btn" data-watch="replace">Replace our list with these</button>`:""}</div>`;
 }
 document.getElementById("mvLookBtn").onclick=()=>{
   const p=document.getElementById("mvLook");p.hidden=!p.hidden;

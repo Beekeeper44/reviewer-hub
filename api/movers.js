@@ -33,7 +33,11 @@ const ALIASES = { 'one piece': 'onepiece', 'one-piece': 'onepiece', 'pokémon': 
 
 // A 60% move on three sales is noise. Ignore anything below this many sales in 30 days,
 // then rank by % change with a light volume weight so heavily traded names win ties.
-const MIN_VOLUME = Number(process.env.MOVERS_MIN_VOLUME || 3);
+const MIN_VOLUME = Number(process.env.MOVERS_MIN_VOLUME || 3);          // to be searchable in look-ups
+// To make the main Risers & Fallers lists a player needs real volume, so the lists are the
+// established names (Duncan, Shaq, Iverson...) rather than a 5-sale card hitting the cap.
+// If a category is quiet, the bar steps down until it can fill the list.
+const LIST_VOLUME = (process.env.MOVERS_LIST_VOLUME || '25,15').split(',').map(Number).filter(n => n > 0);
 const TOP = 10;
 
 // Speed: the heavy work (Metabase over 100k+ cards, public data, picture lookups) never runs while
@@ -110,9 +114,41 @@ const PUBLIC_NOTE = {
 };
 const NO_DATA = 'Not enough sales yet: needs at least 3 PSA / Beckett / SGC / CSG sales in each of the last two 30-day windows.';
 
+// "Shaquille O'Neal" / "Shaquille O'neal" / "SHAQUILLE O’NEAL", "LeBron James" / "Lebron James",
+// "Bronny James Jr." / "Bronny James": one row each, sales-weighted.
+function nameKey(n) {
+  return String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[.'\u2018\u2019\u02BC`\u00B4]/g, '').replace(/\b(jr|sr|ii|iii|iv)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function mergeNames(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const k = String(r.category || '').toLowerCase() + '|' + nameKey(r.name);
+    const v = Number(r.volume30) || 0, c = Number(r.change30);
+    const g = by.get(k);
+    if (!g) { by.set(k, { ...r, _w: v, _sum: Number.isFinite(c) ? c * Math.max(v, 1) : 0, _n: Math.max(v, 1) }); continue; }
+    if (Number.isFinite(c)) { g._sum += c * Math.max(v, 1); g._n += Math.max(v, 1); }
+    if (v > g._w) {                                  // the busiest spelling supplies name, photo and card
+      Object.assign(g, { name: r.name, image: r.image || g.image, card_image: r.card_image || g.card_image,
+        card_title: r.card_title || g.card_title, url: r.url || g.url, spark: r.spark || g.spark });
+      g._w = v;
+    }
+    g.volume30 = (Number(g.volume30) || 0) + (g === r ? 0 : v);
+  }
+  return [...by.values()].map(g => { const o = { ...g, change30: +(g._sum / g._n).toFixed(2) };
+    delete o._w; delete o._sum; delete o._n; return o; });
+}
+
 async function build() {
   let rows = [], notes = {}, errors = [], feedError = '';
   try { rows = await fromFeed(); } catch (e) { feedError = String(e.message || e); errors.push('Arena data: ' + feedError); }
+  let sqlWarning = '';
+  if (rows.length && !rows.some(r => String(r.method || '').startsWith('like-for-like-v4'))) {
+    sqlWarning = 'Metabase question ' + (process.env.MOVERS_QUESTION_ID || '43429') + ' is still running the OLD SQL, ' +
+      'which shows 0% for busy players. Paste the latest sql/movers.sql into it, save, then press Refresh.';
+  }
+  // multi-player cards ("LeBron James/Kobe Bryant") aren't one player, even if an older query sends them
+  rows = mergeNames(rows.filter(r => !String(r.name || '').includes('/')));
   const fed = new Set(rows.map(x => catOf(x.category)));
 
   // Free public data fills any category the feed doesn't cover.
@@ -128,23 +164,36 @@ async function build() {
         x.volume30 >= (notes[c.id] ? 3 : MIN_VOLUME));        // public Pokémon: 3+ cards per character
     for (const x of pool) index.push({ category: c.id, name: x.name, change30: x.change30, volume30: x.volume30,
       spark: x.spark.length > 20 ? x.spark.slice(-20) : x.spark, url: x.url, card_image: x.card_image, card_title: x.card_title });
-    const up = pool.filter(x => x.change30 > 0).sort((a, b) => score(b) - score(a)).slice(0, TOP);
-    const down = pool.filter(x => x.change30 < 0).sort((a, b) => score(a) - score(b)).slice(0, TOP);
-    return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down,
+    // public Pokémon counts cards, not sales, so it keeps its own small bar
+    const bars = notes[c.id] ? [3] : LIST_VOLUME;
+    // each side steps its bar down on its own, only as far as it needs to fill 10
+    const pick = (sign) => {
+      let best = [], used = bars[0];
+      for (const bar of bars) {
+        best = pool.filter(x => x.volume30 >= bar && Math.sign(x.change30) === sign)
+          .sort((a, b) => sign * (b.change30 - a.change30) || b.volume30 - a.volume30).slice(0, TOP);
+        used = bar;
+        if (best.length >= TOP) break;
+      }
+      return { list: best, bar: used };
+    };
+    const R = pick(1), F = pick(-1);
+    const up = R.list, down = F.list, listBar = Math.max(R.bar, F.bar);
+    return { id: c.id, label: c.label, kind: c.kind, risers: up, fallers: down, listBar,
       volLabel: notes[c.id] ? 'cards' : 'sales',
       note: notes[c.id] || (pool.length ? '' : feedError ? 'Arena data feed not connected: ' + feedError : NO_DATA) };
   });
   if (!categories.some(c => c.risers.length || c.fallers.length))
     return { ok: false, why: errors.length ? errors.join(' · ') : 'no-source' };
   await Promise.all(categories.map(c => addImages([...c.risers, ...c.fallers], c.id)));
-  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories, feedError, cfg: config(),
+  return { ok: true, asOf: new Date().toISOString(), minVolume: MIN_VOLUME, categories, feedError, sqlWarning, cfg: config(),
     _index: index };
 }
 
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v9'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_LIST_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v12'].join('|');
 }
 export async function rebuild() {
   const body = await build();

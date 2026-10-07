@@ -23,9 +23,12 @@
     Cards are grouped into "same card" buckets: card type + parallel + grader + grade
     (e.g. 2018 Prizm Luka #280 Silver PSA 10). For each bucket that sold in BOTH windows:
         bucket change = median price, last 30 days  /  median price, days 31-60  - 1
-    A player's change30 is the average of their bucket changes, weighted by how many
-    sales each bucket had, with every bucket capped at +/-80% so one oddball sale can't
-    swing it. (A plain median stuck at 0% whenever most of a star's cards hadn't moved.)
+    A player's change30 is the average of their bucket changes, each weighted by the
+    smaller of its two windows' sale counts and capped at +/-80%. It is then shrunk
+    toward 0 by evidence/(evidence+3), so a single sale-vs-sale move can't top the list
+    (1 matched sale keeps 25% of its move, 3 keep 50%, 9 keep 75%).
+    To appear: 3+ sales in the last 30 days, and 2+ like-for-like cards, or 1 card with
+    2+ sales in each window. Multi-player cards (A/B/C) are left out.
     A comp copied onto several copies of the same card counts once.
     (The first version divided by the card's current EV; because EVs are set from the
     same comps, busy players came out at 0.00%. This replaces that.)
@@ -61,6 +64,7 @@ WITH cards AS (
     -- third-party slabs only: PSA, Beckett (BGS / BVG / BCCG), SGC, CSG. No Arena Club grades, no raw cards.
     AND UPPER(TRIM(grading_company)) ILIKE ANY ('PSA%', 'BGS%', 'BVG%', 'BCCG%', '%BECKETT%', 'SGC%', 'CSG%')
     AND NULLIF(TRIM(player_name), '') IS NOT NULL
+    AND player_name NOT LIKE '%/%'          -- multi-player cards (Johnson/Jordan/Rodman) aren't one player
 ),
 auction_sales AS (
   SELECT a.item_id AS card_id,
@@ -121,7 +125,8 @@ buckets AS (   -- like-for-like: same card type, parallel, grader and grade
   SELECT category, name, bucket,
     MEDIAN(IFF(d >  DATEADD(day, -30, CURRENT_DATE()), price, NULL))                                           AS now_p,
     MEDIAN(IFF(d <= DATEADD(day, -30, CURRENT_DATE()) AND d > DATEADD(day, -60, CURRENT_DATE()), price, NULL)) AS prev_p,
-    COUNT_IF(d > DATEADD(day, -60, CURRENT_DATE()))                                                            AS n
+    COUNT_IF(d >  DATEADD(day, -30, CURRENT_DATE()))                                                           AS n_now,
+    COUNT_IF(d <= DATEADD(day, -30, CURRENT_DATE()) AND d > DATEADD(day, -60, CURRENT_DATE()))                 AS n_prev
   FROM s GROUP BY category, name, bucket
 ),
 win AS (
@@ -132,10 +137,13 @@ win AS (
     MAX_BY(s.card_title, s.end_at)                     AS card_title
   FROM s GROUP BY s.category, s.name
 ),
-moves AS (
+moves AS (   -- evidence-weighted: a bucket counts as much as its thinner window (1 sale vs 1 sale = weight 1)
   SELECT category, name,
-    SUM(LEAST(GREATEST(now_p / prev_p - 1, -0.8), 0.8) * n) / NULLIF(SUM(n), 0)  AS chg,
-    COUNT(*)                    AS pairs
+    SUM(LEAST(GREATEST(now_p / prev_p - 1, -0.8), 0.8) * LEAST(n_now, n_prev))
+      / NULLIF(SUM(LEAST(n_now, n_prev)), 0)                       AS raw_chg,
+    SUM(LEAST(n_now, n_prev))                                      AS evidence,
+    COUNT(*)                                                       AS pairs,
+    COUNT_IF(n_now >= 2 AND n_prev >= 2)                           AS solid_pairs
   FROM buckets
   WHERE now_p > 0 AND prev_p > 0
   GROUP BY category, name
@@ -151,7 +159,9 @@ spark AS (
 SELECT
   w.category                                          AS "category",
   w.name                                              AS "name",
-  ROUND(m.chg * 100, 2)                               AS "change30",
+  -- shrink toward 0 when evidence is thin: 1 matched sale keeps 25% of the move, 9 keep 75%
+  ROUND(m.raw_chg * m.evidence / (m.evidence + 3) * 100, 2) AS "change30",
+  'like-for-like-v4'                                  AS "method",
   m.pairs                                             AS "pairs",
   w.volume30                                          AS "volume30",
   w.image                                             AS "image",
@@ -162,6 +172,6 @@ SELECT
 FROM   win w
 JOIN   moves m  ON m.category  = w.category AND m.name  = w.name
 JOIN   spark sp ON sp.category = w.category AND sp.name = w.name
-WHERE  w.volume30 >= 3          -- at least 3 sales in the last 30 days
-  AND  m.pairs    >= 1          -- and at least one like-for-like card that sold in both windows
+WHERE  w.volume30 >= 3                       -- at least 3 sales in the last 30 days
+  AND  (m.pairs >= 2 OR m.solid_pairs >= 1)   -- 2+ different cards, or 1 card with 2+ sales in each window
 ORDER  BY ABS("change30") DESC;

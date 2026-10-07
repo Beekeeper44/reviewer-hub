@@ -1,7 +1,7 @@
 import { requireUser } from '../lib/auth.js';
 import { kvGet, kvSet, roster } from '../lib/db.js';
 import { addImages } from '../lib/images.js';
-import { pokemonRows } from '../lib/public-pokemon.js';
+import { pokemonRows, character } from '../lib/public-pokemon.js';
 
 // Risers & Fallers feed.
 //
@@ -28,7 +28,6 @@ const CATS = [
   { id: 'football',   label: 'Football',   kind: 'players' },
   { id: 'pokemon',    label: 'Pokémon',    kind: 'characters' },
   { id: 'onepiece',   label: 'One Piece',  kind: 'characters' },
-  { id: 'pokemon_tcg', label: 'Pokémon TCG', kind: 'raw card market' },
 ];
 const ALIASES = { 'one piece': 'onepiece', 'one-piece': 'onepiece', 'pokémon': 'pokemon', 'pkmn': 'pokemon' };
 
@@ -37,8 +36,9 @@ const ALIASES = { 'one piece': 'onepiece', 'one-piece': 'onepiece', 'pokémon': 
 const MIN_VOLUME = Number(process.env.MOVERS_MIN_VOLUME || 3);          // to be searchable in look-ups
 // To make the main Risers & Fallers lists a player needs real volume, so the lists are the
 // established names (Duncan, Shaq, Iverson...) rather than a 5-sale card hitting the cap.
-// If a category is quiet, the bar steps down until it can fill the list.
-const LIST_VOLUME = (process.env.MOVERS_LIST_VOLUME || '25,15').split(',').map(Number).filter(n => n > 0);
+// If a category is quiet (One Piece, some Pokémon), the bar steps down 25 -> 15 -> 10 -> 5 until it
+// fills 10. The v4 SQL already pulls thin evidence toward 0, so low-volume names no longer spike to +80%.
+const LIST_VOLUME = (process.env.MOVERS_LIST_VOLUME || '25,15,10,5').split(',').map(Number).filter(n => n > 0);
 const TOP = 10;
 
 // Speed: the heavy work (Metabase over 100k+ cards, public data, picture lookups) never runs while
@@ -71,6 +71,8 @@ function clean(r) {
     url: typeof r.url === 'string' && /^https:\/\//.test(r.url) ? r.url : '',
     card_image: typeof (r.card_image || r.image) === 'string' && /^https:\/\//.test(r.card_image || r.image) ? (r.card_image || r.image) : '',
     card_title: String(r.card_title || '').slice(0, 160),
+    raw_market: String(r.raw_market || '').slice(0, 200),
+    raw_url: typeof r.raw_url === 'string' && /^https:\/\//.test(r.raw_url) ? r.raw_url : '',
     change30: Number(r.change30),
     volume30: Math.round(Number(r.volume30) || 0),
     spark: spark.length > 120 ? spark.slice(-120) : spark,
@@ -152,10 +154,26 @@ async function build() {
   rows = mergeNames(rows.filter(r => !String(r.name || '').includes('/')));
   const fed = new Set(rows.map(x => catOf(x.category)));
 
-  // The raw Pokémon TCG market always shows next to our graded Pokémon numbers.
+  // Raw Pokémon TCG prices (TCGplayer / Cardmarket) are attached to our graded Pokémon rows for
+  // the pop-up. Only if Metabase sent no Pokémon at all does the raw market fill the Pokémon list.
+  let raw = new Map();
   if (process.env.MOVERS_PUBLIC !== 'off') {
-    try { rows = rows.concat(await pokemonRows()); notes.pokemon_tcg = PUBLIC_NOTE.pokemon_tcg; }
-    catch (e) { errors.push('Pokémon TCG public data: ' + (e.message || e)); }
+    try {
+      const pub = await pokemonRows();
+      for (const r of pub) raw.set(character(r.name).toLowerCase(), r);
+      if (!fed.has('pokemon')) {
+        rows = rows.concat(pub.map(r => { const o = { ...r, category: 'pokemon' }; delete o.variants; return o; }));
+        notes.pokemon = PUBLIC_NOTE.pokemon_tcg;
+      }
+    } catch (e) { errors.push('Pokémon TCG prices: ' + (e.message || e)); }
+  }
+  for (const r of rows) {
+    if (catOf(r.category) !== 'pokemon') continue;
+    const m = raw.get(character(r.name).toLowerCase());
+    if (!m) continue;
+    const same = (m.variants || []).find(v => v.name.toLowerCase() === String(r.name).toLowerCase());
+    const pick = same || m;                          // exact printing if we have it, else the character's top card
+    r.raw_market = pick.raw_market; r.raw_url = pick.raw_url;
   }
 
   const index = [];
@@ -164,7 +182,8 @@ async function build() {
       .filter(x => x.name && Number.isFinite(x.change30) &&
         x.volume30 >= (notes[c.id] ? 3 : MIN_VOLUME));        // public Pokémon: 3+ cards per character
     for (const x of pool) index.push({ category: c.id, name: x.name, change30: x.change30, volume30: x.volume30,
-      spark: x.spark.length > 20 ? x.spark.slice(-20) : x.spark, url: x.url, card_image: x.card_image, card_title: x.card_title });
+      spark: x.spark.length > 20 ? x.spark.slice(-20) : x.spark, url: x.url, card_image: x.card_image, card_title: x.card_title,
+      raw_market: x.raw_market, raw_url: x.raw_url });
     // public Pokémon counts cards, not sales, so it keeps its own small bar
     const bars = notes[c.id] ? [3] : LIST_VOLUME;
     // each side steps its bar down on its own, only as far as it needs to fill 10
@@ -194,7 +213,7 @@ async function build() {
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_LIST_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v13'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_LIST_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v15'].join('|');
 }
 export async function rebuild() {
   const body = await build();

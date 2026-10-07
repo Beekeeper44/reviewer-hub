@@ -39,7 +39,7 @@ In Vercel, go to **Project → Settings → Environment Variables**. Add the two
 | `MOVERS_SOURCE_TOKEN` | Optional. Sent as `Authorization: Bearer …` to that feed |
 | `METABASE_HOST` + `METABASE_API_KEY` | **Needed for Risers & Fallers.** Your Metabase address and an API key that can run question 43429. `MOVERS_METABASE_API_KEY` also works |
 | `MOVERS_MIN_VOLUME` | Optional. Minimum 30-day sales to be searchable in look-ups, default 3 |
-| `MOVERS_LIST_VOLUME` | Optional. Sales needed to make the main lists, tried in order until a category fills, default `25,15` |
+| `MOVERS_LIST_VOLUME` | Optional. Sales needed to make the main lists, tried in order until a category fills, default `25,15,10,5` |
 | `TCGPLAYER_PUBLIC_KEY` / `TCGPLAYER_PRIVATE_KEY` | Optional. TCGplayer developer keys, for Pokémon and One Piece card images |
 | `POKEMONTCG_API_KEY` | Optional. Raises the Pokémon TCG API rate limit |
 
@@ -210,7 +210,7 @@ Risers & Fallers never queries Metabase or the public APIs while someone is wait
 
 ### Free public data (works with no setup)
 
-**Pokémon TCG (raw market) shows alongside our graded Pokémon.** It has its own tab and card, separate from the graded Pokémon numbers from Metabase. The Pokémon TCG API publishes Cardmarket's average sold prices
+**Raw Pokémon TCG prices appear in the Pokémon pop-ups.** Our graded Pokémon rankings come from Metabase. Each Pokémon pop-up also shows the raw (ungraded) TCGplayer market price and the Cardmarket 30-day average for the same printing, with a TCGplayer link. If Metabase sends no Pokémon at all, the raw market fills the Pokémon list instead. The Pokémon TCG API publishes Cardmarket's average sold prices
 for every card over the last 1, 7 and 30 days. `lib/public-pokemon.js` pulls the chase-rarity
 cards (illustration rares, ex, V, VMAX and so on), groups them by character, and ranks each
 character by how its recent sales compare with its 30-day average.

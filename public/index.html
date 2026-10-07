@@ -1106,6 +1106,8 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
 .mvsecgrid.across .mvlist .mt{flex-wrap:wrap;row-gap:0;white-space:normal}
 .mvsecgrid.across .mvlist li{grid-template-columns:16px 42px minmax(0,1fr)}
 .mvsecgrid.across .mvlist img{width:42px;height:59px}
+.mvm-raw{margin:0 0 10px;font-size:12.5px;padding:6px 10px;border-radius:8px;background:var(--well);display:inline-block}
+.mvm-raw a{color:var(--green)}
 </style>
 </head>
 <body>
@@ -1430,7 +1432,7 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
       <div class="trow" style="margin:10px 0 0;justify-content:flex-end;gap:8px">
         <select id="mvLookCat" class="rolesel"><option value="all">All categories</option><option value="baseball">Baseball</option>
           <option value="basketball">Basketball</option><option value="football">Football</option>
-          <option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="pokemon_tcg">Pokémon TCG (raw)</option></select>
+          <option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option></select>
         <button class="btn" id="mvLookClear">Clear</button>
         <button class="btn go" id="mvLookGo">Find in our data</button>
       </div>
@@ -2164,6 +2166,7 @@ function mvOpen(i){
       onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
     <h3>${esc(x.name)}</h3>
     ${x.card_title?`<p class="mvm-title">${esc(x.card_title)}</p>`:""}
+    ${x.raw_market?`<p class="mvm-raw">${esc(x.raw_market)}${x.raw_url?` · <a href="${esc(x.raw_url)}" target="_blank" rel="noopener">TCGplayer &#8599;</a>`:""}</p>`:""}
     <p class="mvm-stats"><span class="mvchg ${up?"up":"down"}">${up?"&#9650;":"&#9660;"} ${mvPct(x.change30)}</span>
       <span>${x.volume30.toLocaleString()} ${esc(vlab)} in 30 days</span></p>
     <div class="mvm-spark">${mvSpark(x.spark,up)}</div>
@@ -2324,7 +2327,7 @@ async function mvLookup(text,fromImage){
   const li=x=>{
     const up=x.change30>=0,vl=((mvMeta[x.category]||{}).volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
     return `<li data-mvrow="${mvRows.push({x,up,cat:x.category})-1}" tabindex="0" title="Click to see the card">
-      <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"Baseball",basketball:"Basketball",football:"Football",pokemon:"Pokémon",onepiece:"One Piece",pokemon_tcg:"Pokémon TCG"})[x.category]||""}</span>
+      <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"Baseball",basketball:"Basketball",football:"Football",pokemon:"Pokémon",onepiece:"One Piece"})[x.category]||""}</span>
       <img src="${esc(x.image||x.card_image||mvArt(x.name,x.category))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,x.category))}"
         onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
       <span class="bd"><b>${esc(x.name)}</b>

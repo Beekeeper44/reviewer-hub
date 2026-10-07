@@ -82,7 +82,11 @@ export default requireUser(async function (req, res) {
         for (let i = 0; i < lineToks.length; i++) {
           let sc = scoreLine(p.toks, lineToks[i]);
           // typed names can be partial: "Charizard" finds "Charizard ex", "Charizard VMAX", "Mega Charizard"
-          if (!sc && typed && lineToks[i].every(t => t.length >= 3)) sc = scoreLine(lineToks[i], p.toks) ? 0.5 : 0;
+          if (!sc && typed && lineToks[i].every(t => t.length >= 3)) {
+            const k = lineToks[i].length;                // "Charizard" -> "Charizard ex": exact words only
+            for (let j = 0; j + k <= p.toks.length && !sc; j++)
+              if (lineToks[i].every((t, q) => t === p.toks[j + q])) sc = 0.5;
+          }
           if (sc > best) { best = sc; at = i; }
         }
         if (!best) continue;

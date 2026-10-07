@@ -2336,8 +2336,10 @@ async function mvLookup(text,fromImage){
         <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`};
   // exact name typed ("kobe bryant" -> Kobe Bryant) goes on top as the best match, whatever its move
   // "Best match" only helps when an exact name sits among looser matches (kobe bryant vs LeBron/Kobe cards)
+  // "Best match" is only for a single typed name (kobe bryant vs LeBron/Kobe cards); lists sort into Risers/Fallers
+  const typedLines=fromImage?0:text.split(/\n+/).filter(l=>l.trim()).length;
   const ex=d.hits.filter(x=>x.exact&&!fromImage);
-  const best=ex.length&&ex.length<d.hits.length?ex:[];
+  const best=typedLines===1&&ex.length&&ex.length<d.hits.length?ex:[];
   const rest=d.hits.filter(x=>!best.includes(x));
   const ris=rest.filter(x=>x.change30>0).sort((a,b)=>b.change30-a.change30);
   const fal=rest.filter(x=>x.change30<0).sort((a,b)=>a.change30-b.change30);

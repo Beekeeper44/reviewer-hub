@@ -28,6 +28,7 @@ const CATS = [
   { id: 'football',   label: 'Football',   kind: 'players' },
   { id: 'pokemon',    label: 'Pokémon',    kind: 'characters' },
   { id: 'onepiece',   label: 'One Piece',  kind: 'characters' },
+  { id: 'pokemon_tcg', label: 'Pokémon TCG', kind: 'raw card market' },
 ];
 const ALIASES = { 'one piece': 'onepiece', 'one-piece': 'onepiece', 'pokémon': 'pokemon', 'pkmn': 'pokemon' };
 
@@ -110,7 +111,7 @@ async function fromFeed() {
 
 // Where each category's numbers come from, shown under the lists.
 const PUBLIC_NOTE = {
-  pokemon: 'Public data: Cardmarket average sold prices via the Pokémon TCG API. Sales column = cards with sales in the last 30 days.',
+  pokemon_tcg: 'Raw (ungraded) Pokémon market: Cardmarket average sold prices and TCGplayer market prices via the Pokémon TCG API. Count = cards with sales in the last 30 days.',
 };
 const NO_DATA = 'Not enough sales yet: needs at least 3 PSA / Beckett / SGC / CSG sales in each of the last two 30-day windows.';
 
@@ -151,10 +152,10 @@ async function build() {
   rows = mergeNames(rows.filter(r => !String(r.name || '').includes('/')));
   const fed = new Set(rows.map(x => catOf(x.category)));
 
-  // Free public data fills any category the feed doesn't cover.
-  if (!fed.has('pokemon') && process.env.MOVERS_PUBLIC !== 'off') {
-    try { rows = rows.concat(await pokemonRows()); notes.pokemon = PUBLIC_NOTE.pokemon; }
-    catch (e) { errors.push('Pokémon public data: ' + (e.message || e)); }
+  // The raw Pokémon TCG market always shows next to our graded Pokémon numbers.
+  if (process.env.MOVERS_PUBLIC !== 'off') {
+    try { rows = rows.concat(await pokemonRows()); notes.pokemon_tcg = PUBLIC_NOTE.pokemon_tcg; }
+    catch (e) { errors.push('Pokémon TCG public data: ' + (e.message || e)); }
   }
 
   const index = [];
@@ -193,7 +194,7 @@ async function build() {
 function config() {
   return [process.env.MOVERS_SOURCE_URL || process.env.METABASE_HOST || process.env.METABASE_URL || '43429',
     !!(process.env.MOVERS_METABASE_API_KEY || process.env.METABASE_API_KEY || process.env.METABASE_KEY),
-    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_LIST_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v12'].join('|');
+    process.env.MOVERS_MIN_VOLUME || '', process.env.MOVERS_LIST_VOLUME || '', process.env.MOVERS_PUBLIC || '', 'v13'].join('|');
 }
 export async function rebuild() {
   const body = await build();

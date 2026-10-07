@@ -210,7 +210,7 @@ Risers & Fallers never queries Metabase or the public APIs while someone is wait
 
 ### Free public data (works with no setup)
 
-**Pokémon fills in on its own.** The Pokémon TCG API publishes Cardmarket's average sold prices
+**Pokémon TCG (raw market) shows alongside our graded Pokémon.** It has its own tab and card, separate from the graded Pokémon numbers from Metabase. The Pokémon TCG API publishes Cardmarket's average sold prices
 for every card over the last 1, 7 and 30 days. `lib/public-pokemon.js` pulls the chase-rarity
 cards (illustration rares, ex, V, VMAX and so on), groups them by character, and ranks each
 character by how its recent sales compare with its 30-day average.
@@ -229,7 +229,7 @@ new developers, and the card price guides that track it, such as SportsCardsPro 
 are paid. For those three categories, use Arena Club's comps below, which are themselves
 external sold prices, or a paid price-guide key.
 
-If `MOVERS_SOURCE_URL` also returns Pokémon rows, the feed wins and the public data is skipped.
+The pop-up for each character shows the top card's Cardmarket 30-day average and its TCGplayer market price, and links to TCGplayer.
 
 ### Wiring in Arena Club's own data (recommended)
 

@@ -1028,7 +1028,7 @@ html[data-view="mobile"] .mvsec .mvcat{margin-bottom:14px}
 .invbox a.btn{color:var(--ink);display:inline-flex;align-items:center}
 
 /* robust card layout: name gets the full width, trend line sits under the numbers, cards wrap when narrow */
-.mvsecgrid.across{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.mvsecgrid.across{grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
 .mvlist li,.mvsecgrid.split .mvlist li{grid-template-columns:20px 46px minmax(0,1fr);gap:10px;padding:10px 4px;align-items:center}
 .mvlist img{width:46px;height:64px}
 .mvlist .bd{gap:3px}
@@ -1096,6 +1096,16 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
   border:2px solid var(--green);border-radius:12px;background:var(--well);font-size:14px}
 .mvwatch b{margin-right:2px}
 .mvlook-use{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:14px}
+/* full category names on look-up tags */
+.mvlook-list li,.mvlook-side .mvlist li,.mvlook-best .mvlist li,.mvlook-side.flat .mvlist li{grid-template-columns:74px 46px minmax(0,1fr)!important}
+.mvcat-tag{font-size:10.5px!important;letter-spacing:0;padding:4px 2px!important;line-height:1.15;white-space:normal;text-align:center}
+/* six cards across: keep headers on one line and numbers unclipped */
+.mvsecgrid.across .mvcat h3{flex-wrap:nowrap;white-space:nowrap}
+.mvsecgrid.across .mvcat h3 small{display:none}
+.mvsecgrid.across .mvcat h3 button{white-space:nowrap}
+.mvsecgrid.across .mvlist .mt{flex-wrap:wrap;row-gap:0;white-space:normal}
+.mvsecgrid.across .mvlist li{grid-template-columns:16px 42px minmax(0,1fr)}
+.mvsecgrid.across .mvlist img{width:42px;height:59px}
 </style>
 </head>
 <body>
@@ -1420,7 +1430,7 @@ html[data-view="mobile"] .mvlook-split{grid-template-columns:1fr}
       <div class="trow" style="margin:10px 0 0;justify-content:flex-end;gap:8px">
         <select id="mvLookCat" class="rolesel"><option value="all">All categories</option><option value="baseball">Baseball</option>
           <option value="basketball">Basketball</option><option value="football">Football</option>
-          <option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option></select>
+          <option value="pokemon">Pokémon</option><option value="onepiece">One Piece</option><option value="pokemon_tcg">Pokémon TCG (raw)</option></select>
         <button class="btn" id="mvLookClear">Clear</button>
         <button class="btn go" id="mvLookGo">Find in our data</button>
       </div>
@@ -2066,7 +2076,7 @@ const MV_ART={
   onepiece:{a:"#D32F2F",b:"#6A0F0F",icon:`<circle cx="30" cy="34" r="12" fill="none" stroke="#fff" stroke-width="2"/><path d="M30 22v24M18 34h24M22 26l16 16M38 26L22 42" stroke="#fff" stroke-width="1.6"/><circle cx="30" cy="34" r="3.5" fill="#fff"/>`},
 };
 function mvArt(name,cat){
-  const t=MV_ART[cat]||MV_ART.baseball,id="g"+Math.random().toString(36).slice(2,8);
+  const t=MV_ART[cat==='pokemon_tcg'?'pokemon':cat]||MV_ART.baseball,id="g"+Math.random().toString(36).slice(2,8);
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 84"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.a}"/><stop offset="1" stop-color="${t.b}"/></linearGradient></defs>`+
     `<rect x="1" y="1" width="58" height="82" rx="6" fill="url(#${id})" stroke="#fff" stroke-opacity=".85" stroke-width="2"/>`+
     `<rect x="6" y="8" width="48" height="52" rx="3" fill="#000" fill-opacity=".18"/>${t.icon}`+
@@ -2129,8 +2139,8 @@ function renderMovers(){
     ((d.builtAt||d.asOf)?` Updated ${esc(new Date(d.builtAt||d.asOf).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))}.`:"");
   const n=mvCat==="all"?5:10;
   const shown=mvCat==="all"?cats:cats.filter(c=>c.id===mvCat);
-  const block=(c,up)=>`<div class="mvcat"><h3>${esc(c.label)}<small>${c.kind==="characters"?"Characters":"Players"}</small>${
-      mvCat==="all"?`<button data-mv="${c.id}">See top 10</button>`:""}</h3>
+  const block=(c,up)=>`<div class="mvcat"><h3>${esc(c.label)}<small>${c.kind==="characters"?"Characters":c.kind==="raw card market"?"Raw cards":"Players"}</small>${
+      mvCat==="all"?`<button data-mv="${c.id}">Top 10</button>`:""}</h3>
       ${mvCat==="all"?mvList(up?c.risers:c.fallers,up,n,c.id):mvTable(up?c.risers:c.fallers,up,n,c.id)}</div>`;
   const section=up=>`<section class="mvsec ${up?"up":"down"} ${mvCat==="all"?"":"solo"}">
       <h2 class="mvhead"><span class="mvarrow">${up?"&#9650;":"&#9660;"}</span>${up?"Risers":"Fallers"}
@@ -2314,7 +2324,7 @@ async function mvLookup(text,fromImage){
   const li=x=>{
     const up=x.change30>=0,vl=((mvMeta[x.category]||{}).volLabel||"sales").replace(/s$/,x.volume30===1?"":"s");
     return `<li data-mvrow="${mvRows.push({x,up,cat:x.category})-1}" tabindex="0" title="Click to see the card">
-      <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"MLB",basketball:"NBA",football:"NFL",pokemon:"PKM",onepiece:"OP"})[x.category]||""}</span>
+      <span class="rk mvcat-tag" title="${esc(lab(x.category))}">${({baseball:"Baseball",basketball:"Basketball",football:"Football",pokemon:"Pokémon",onepiece:"One Piece",pokemon_tcg:"Pokémon TCG"})[x.category]||""}</span>
       <img src="${esc(x.image||x.card_image||mvArt(x.name,x.category))}" alt="" loading="lazy" data-fb="${esc(mvArt(x.name,x.category))}"
         onerror="if(this.src!==this.dataset.fb)this.src=this.dataset.fb">
       <span class="bd"><b>${esc(x.name)}</b>
@@ -2322,8 +2332,10 @@ async function mvLookup(text,fromImage){
           <span class="vol">${x.volume30.toLocaleString()} ${esc(vl)}</span></span>
         <span class="sp">${mvSpark(x.spark,up)}</span></span></li>`};
   // exact name typed ("kobe bryant" -> Kobe Bryant) goes on top as the best match, whatever its move
-  const best=d.hits.filter(x=>x.exact&&!fromImage);
-  const rest=d.hits.filter(x=>!(x.exact&&!fromImage));
+  // "Best match" only helps when an exact name sits among looser matches (kobe bryant vs LeBron/Kobe cards)
+  const ex=d.hits.filter(x=>x.exact&&!fromImage);
+  const best=ex.length&&ex.length<d.hits.length?ex:[];
+  const rest=d.hits.filter(x=>!best.includes(x));
   const ris=rest.filter(x=>x.change30>0).sort((a,b)=>b.change30-a.change30);
   const fal=rest.filter(x=>x.change30<0).sort((a,b)=>a.change30-b.change30);
   const flat=rest.filter(x=>x.change30===0);
